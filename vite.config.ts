@@ -5,7 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    base: './',
+    base: '/SSN-YRC-Attendance-Management/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
