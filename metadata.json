@@ -1,0 +1,6 @@
+{
+  "name": "PCD Attendance Tracker",
+  "description": "Comprehensive Attendance Tracking Application for Extra-Curricular activities (YRC, NSS, NSO, NReg) with Dynamic Digital ID routing, Barcode scanner, and multi-batch management.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
