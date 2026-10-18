@@ -1,16 +1,23 @@
 import React from 'react';
 import { UserProfile } from '../types';
-import { INITIAL_USER_PROFILES } from '../data/seedData';
-import { YrcEmblem } from './YrcEmblem';
-import { Shield, Sparkles, QrCode, LogOut } from 'lucide-react';
+import { PcdEmblem } from './PcdEmblem';
+import {
+  Calendar,
+  Database,
+  BarChart3,
+  LogOut,
+  Settings2,
+  Plus,
+  Clock,
+} from 'lucide-react';
 
 interface NavbarProps {
-  currentTab: 'scanner' | 'events' | 'rosters' | 'attendance' | 'analytics';
-  setCurrentTab: (tab: 'scanner' | 'events' | 'rosters' | 'attendance' | 'analytics') => void;
+  currentTab: 'events' | 'database' | 'analytics';
+  setCurrentTab: (tab: 'events' | 'database' | 'analytics') => void;
   currentUser: UserProfile;
-  setCurrentUser: (user: UserProfile) => void;
+  activeEventName?: string;
   onOpenNewEvent: () => void;
-  onOpenArchitecture: () => void;
+  onOpenSettings: () => void;
   onLogout: () => void;
 }
 
@@ -18,213 +25,180 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentTab,
   setCurrentTab,
   currentUser,
-  setCurrentUser,
+  activeEventName,
   onOpenNewEvent,
-  onOpenArchitecture,
+  onOpenSettings,
   onLogout,
 }) => {
   const isCoordinator = currentUser.role === 'coordinator';
 
   return (
-    <header className="sticky top-0 z-40 bg-white border-b border-red-100 shadow-xs">
-      {/* Top subtle crimson accent stripe */}
-      <div className="h-1 bg-gradient-to-r from-red-700 via-red-600 to-rose-600 w-full" />
+    <>
+      {/* Top Header with Signature PCD Color Theme */}
+      <header className="sticky top-0 z-40 bg-white border-b border-neutral-200/90 shadow-2xs">
+        {/* Top signature PCD colour theme bar: Red (YRC) · Blue (NSS) · Emerald (NSO) */}
+        <div className="h-1 bg-gradient-to-r from-red-600 via-blue-600 to-emerald-600 w-full" />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-4 h-16">
-          {/* Zone 1: SSN Youth Red Cross Brand */}
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              onClick={() => setCurrentTab('scanner')}
-              className="flex items-center gap-2.5 text-left group cursor-pointer focus:outline-none min-h-[44px]"
-            >
-              <YrcEmblem size={34} />
-              <div>
+        <div className="max-w-7xl mx-auto px-3 sm:px-6">
+          <div className="flex items-center justify-between h-13 sm:h-16 gap-2">
+            {/* Brand with Pure Colour Theme Swatch (No Logo Design) */}
+            <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+              <PcdEmblem size={28} />
+              <div className="flex flex-col">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-base sm:text-lg font-extrabold tracking-tight text-neutral-900 group-hover:text-red-700 transition-colors whitespace-nowrap">
-                    SSN Youth Red Cross
+                  <span className="text-sm sm:text-base font-black tracking-tight text-neutral-900">
+                    SSN PCD
                   </span>
-                  <span className="hidden sm:inline-block text-[10px] font-mono font-bold bg-red-50 text-red-700 border border-red-200 px-1.5 py-0.5 rounded">
-                    YRC
+                  <span className="text-xs sm:text-sm font-semibold text-red-700">
+                    Attendance
+                  </span>
+                  <span className="text-[9px] font-mono font-bold bg-red-50 text-red-700 border border-red-200 px-1.5 py-0.5 rounded-sm">
+                    {isCoordinator ? 'Coordinator' : 'Admin'}
                   </span>
                 </div>
-                <div className="text-[10px] sm:text-[11px] text-neutral-500 font-medium">
-                  Health · Service · Friendship · Attendance
+                <div className="text-[10px] text-neutral-500 font-medium truncate max-w-[170px] sm:max-w-none">
+                  {isCoordinator ? (activeEventName || 'Assigned Event Scanner') : 'YRC · NSS · NSO · NReg'}
                 </div>
               </div>
-            </button>
-          </div>
-
-          {/* Zone 2: Navigation Links (HIDDEN FOR COORDINATORS - ONLY SHOW FOR ADMINS) */}
-          {!isCoordinator ? (
-            <nav className="hidden md:flex items-center gap-5 text-xs font-semibold text-neutral-600">
-              <button
-                onClick={() => setCurrentTab('scanner')}
-                className={`whitespace-nowrap shrink-0 transition-colors py-2 cursor-pointer min-h-[44px] flex items-center ${
-                  currentTab === 'scanner'
-                    ? 'text-red-700 font-bold border-b-2 border-red-600'
-                    : 'hover:text-neutral-900'
-                }`}
-              >
-                Live Scanner
-              </button>
-              <button
-                onClick={() => setCurrentTab('events')}
-                className={`whitespace-nowrap shrink-0 transition-colors py-2 cursor-pointer min-h-[44px] flex items-center ${
-                  currentTab === 'events'
-                    ? 'text-red-700 font-bold border-b-2 border-red-600'
-                    : 'hover:text-neutral-900'
-                }`}
-              >
-                Events & Allocation
-              </button>
-              <button
-                onClick={() => setCurrentTab('rosters')}
-                className={`whitespace-nowrap shrink-0 transition-colors py-2 cursor-pointer min-h-[44px] flex items-center ${
-                  currentTab === 'rosters'
-                    ? 'text-red-700 font-bold border-b-2 border-red-600'
-                    : 'hover:text-neutral-900'
-                }`}
-              >
-                13 Roster Sheets
-              </button>
-              <button
-                onClick={() => setCurrentTab('attendance')}
-                className={`whitespace-nowrap shrink-0 transition-colors py-2 cursor-pointer min-h-[44px] flex items-center ${
-                  currentTab === 'attendance'
-                    ? 'text-red-700 font-bold border-b-2 border-red-600'
-                    : 'hover:text-neutral-900'
-                }`}
-              >
-                Attendance Logs
-              </button>
-              <button
-                onClick={() => setCurrentTab('analytics')}
-                className={`whitespace-nowrap shrink-0 transition-colors py-2 cursor-pointer min-h-[44px] flex items-center ${
-                  currentTab === 'analytics'
-                    ? 'text-red-700 font-bold border-b-2 border-red-600'
-                    : 'hover:text-neutral-900'
-                }`}
-              >
-                Analytics
-              </button>
-            </nav>
-          ) : (
-            <div className="hidden md:flex items-center gap-2 text-xs text-red-700 font-medium bg-red-50/80 border border-red-100 px-3 py-1.5 rounded-full">
-              <QrCode className="w-3.5 h-3.5 text-red-600" />
-              <span>Dedicated Live Attendance Scanner Active</span>
-            </div>
-          )}
-
-          {/* Zone 3: User role switcher + primary action */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* User Switcher Dropdown */}
-            <div className="relative">
-              <select
-                aria-label="Switch User Profile"
-                value={currentUser.email}
-                onChange={(e) => {
-                  const found = INITIAL_USER_PROFILES.find((u) => u.email === e.target.value);
-                  if (found) {
-                    setCurrentUser(found);
-                    if (found.role === 'coordinator') {
-                      setCurrentTab('scanner');
-                    }
-                  }
-                }}
-                className="text-xs bg-neutral-50 hover:bg-neutral-100 border border-neutral-300 rounded-lg px-2.5 py-2 font-medium text-neutral-800 cursor-pointer focus:outline-none focus:ring-2 focus:ring-red-600 min-h-[44px]"
-              >
-                {INITIAL_USER_PROFILES.map((u) => (
-                  <option key={u.email} value={u.email}>
-                    {u.role === 'admin' ? '🛡️ Admin' : '👤 Coord'}: {u.name.split(' ')[0]} ({u.email.split('@')[0]})
-                  </option>
-                ))}
-              </select>
             </div>
 
-            {/* Apps Script Webhook & Architecture Info Button */}
-            <button
-              onClick={onOpenArchitecture}
-              title="Google Apps Script Webhook & Architecture"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-neutral-700 bg-neutral-100 hover:bg-neutral-200 border border-neutral-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer min-h-[44px]"
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Apps Script Webhook</span>
-            </button>
+            {/* Desktop Center Navigation Pills with PCD Color Themes */}
+            {!isCoordinator && (
+              <nav className="hidden sm:flex items-center gap-1.5">
+                <button
+                  onClick={() => setCurrentTab('events')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer min-h-[38px] ${
+                    currentTab === 'events'
+                      ? 'bg-red-50 text-red-700 font-bold border border-red-200 shadow-2xs'
+                      : 'text-neutral-600 hover:text-red-700 hover:bg-red-50/50'
+                  }`}
+                >
+                  <Calendar className="w-3.5 h-3.5 text-red-600" />
+                  <span>Events</span>
+                </button>
 
-            {/* Primary Action Button */}
-            {!isCoordinator ? (
-              <button
-                onClick={onOpenNewEvent}
-                className="px-3.5 sm:px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 active:bg-red-800 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-xs min-h-[44px] flex items-center"
-              >
-                + New Event
-              </button>
-            ) : (
-              <div className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-red-800 bg-red-50 border border-red-200 rounded-lg min-h-[44px]">
-                <span className="w-2 h-2 rounded-full bg-red-600" />
-                <span className="whitespace-nowrap">Scanner Ready</span>
+                <button
+                  onClick={() => setCurrentTab('database')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer min-h-[38px] ${
+                    currentTab === 'database'
+                      ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200 shadow-2xs'
+                      : 'text-neutral-600 hover:text-blue-700 hover:bg-blue-50/50'
+                  }`}
+                >
+                  <Database className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Database</span>
+                </button>
+
+                <button
+                  onClick={() => setCurrentTab('analytics')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer min-h-[38px] ${
+                    currentTab === 'analytics'
+                      ? 'bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 shadow-2xs'
+                      : 'text-neutral-600 hover:text-emerald-700 hover:bg-emerald-50/50'
+                  }`}
+                >
+                  <BarChart3 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Analytics</span>
+                </button>
+              </nav>
+            )}
+
+            {isCoordinator && (
+              <div className="flex items-center gap-1.5 text-xs text-neutral-600 bg-neutral-50 border border-neutral-200 px-2.5 py-1 rounded-md">
+                <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span className="font-mono text-[11px] truncate max-w-[130px] sm:max-w-none">
+                  {currentUser.email}
+                </span>
               </div>
             )}
 
-            {/* Log Out Button */}
-            <button
-              onClick={onLogout}
-              title="Log out and return to Login Screen"
-              className="p-2 sm:px-2.5 sm:py-2 text-xs font-semibold text-neutral-700 hover:text-red-700 bg-neutral-100 hover:bg-red-50 border border-neutral-200 hover:border-red-200 rounded-lg transition-colors cursor-pointer min-h-[44px] flex items-center gap-1.5 shadow-2xs"
-            >
-              <LogOut className="w-4 h-4 text-neutral-600 group-hover:text-red-600" />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
+            {/* Right actions: SSN Red Theme for Action Buttons */}
+            <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+              {!isCoordinator && (
+                <>
+                  <button
+                    onClick={onOpenNewEvent}
+                    className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer min-h-[36px] transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Create Event</span>
+                  </button>
+
+                  <button
+                    onClick={onOpenSettings}
+                    title="Google Sheet & Webhook Settings"
+                    className="p-2 text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100 rounded-lg cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center transition-colors"
+                  >
+                    <Settings2 className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+
+              <button
+                onClick={onLogout}
+                title="Sign Out"
+                className="p-2 text-neutral-500 hover:text-red-700 hover:bg-red-50 rounded-lg cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
+      </header>
 
-        {/* Mobile Navigation bar (ONLY FOR ADMIN - HIDE FOR COORDINATORS) */}
-        {!isCoordinator && (
-          <div className="flex md:hidden items-center justify-between py-2 border-t border-neutral-100 text-xs overflow-x-auto gap-2">
-            <button
-              onClick={() => setCurrentTab('scanner')}
-              className={`whitespace-nowrap px-3 py-1.5 rounded-md min-h-[36px] ${
-                currentTab === 'scanner' ? 'font-bold bg-red-50 text-red-700' : 'text-neutral-600'
-              }`}
-            >
-              Scanner
-            </button>
+      {/* Mobile Sticky Bottom Navigation Bar with PCD Color Theme Accents */}
+      {!isCoordinator && (
+        <nav
+          aria-label="Mobile Navigation"
+          className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-t border-neutral-200 shadow-lg px-2 py-1 safe-area-pb"
+        >
+          <div className="grid grid-cols-4 gap-1 max-w-md mx-auto">
             <button
               onClick={() => setCurrentTab('events')}
-              className={`whitespace-nowrap px-3 py-1.5 rounded-md min-h-[36px] ${
-                currentTab === 'events' ? 'font-bold bg-red-50 text-red-700' : 'text-neutral-600'
+              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer min-h-[46px] ${
+                currentTab === 'events'
+                  ? 'text-red-600 font-black bg-red-50'
+                  : 'text-neutral-500 hover:text-red-600'
               }`}
             >
-              Events
+              <Calendar className="w-4 h-4 mb-0.5" />
+              <span className="text-[10px] leading-tight">Events</span>
             </button>
+
             <button
-              onClick={() => setCurrentTab('rosters')}
-              className={`whitespace-nowrap px-3 py-1.5 rounded-md min-h-[36px] ${
-                currentTab === 'rosters' ? 'font-bold bg-red-50 text-red-700' : 'text-neutral-600'
+              onClick={() => setCurrentTab('database')}
+              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer min-h-[46px] ${
+                currentTab === 'database'
+                  ? 'text-blue-600 font-black bg-blue-50'
+                  : 'text-neutral-500 hover:text-blue-600'
               }`}
             >
-              13 Sheets
+              <Database className="w-4 h-4 mb-0.5" />
+              <span className="text-[10px] leading-tight">Database</span>
             </button>
-            <button
-              onClick={() => setCurrentTab('attendance')}
-              className={`whitespace-nowrap px-3 py-1.5 rounded-md min-h-[36px] ${
-                currentTab === 'attendance' ? 'font-bold bg-red-50 text-red-700' : 'text-neutral-600'
-              }`}
-            >
-              Attendance
-            </button>
+
             <button
               onClick={() => setCurrentTab('analytics')}
-              className={`whitespace-nowrap px-3 py-1.5 rounded-md min-h-[36px] ${
-                currentTab === 'analytics' ? 'font-bold bg-red-50 text-red-700' : 'text-neutral-600'
+              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer min-h-[46px] ${
+                currentTab === 'analytics'
+                  ? 'text-emerald-600 font-black bg-emerald-50'
+                  : 'text-neutral-500 hover:text-emerald-600'
               }`}
             >
-              Analytics
+              <BarChart3 className="w-4 h-4 mb-0.5" />
+              <span className="text-[10px] leading-tight">Analytics</span>
+            </button>
+
+            <button
+              onClick={onOpenSettings}
+              className="flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-neutral-500 hover:text-neutral-900 transition-all cursor-pointer min-h-[46px]"
+            >
+              <Settings2 className="w-4 h-4 mb-0.5" />
+              <span className="text-[10px] leading-tight">Settings</span>
             </button>
           </div>
-        )}
-      </div>
-    </header>
+        </nav>
+      )}
+    </>
   );
 };

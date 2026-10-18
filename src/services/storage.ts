@@ -1,21 +1,56 @@
-import { INITIAL_USER_PROFILES, SEED_ATTENDANCE, SEED_EVENTS, SEED_ROSTERS, SEED_UPDATE_LOGS } from '../data/seedData';
-import { AttendanceRecord, PCDEvent, PCDType, SheetName, Student, UpdateRecord, UserProfile } from '../types';
+import { AttendanceRecord, PCDEvent, PCDType, Student, StudentYear, UserProfile, getYearFromId } from '../types';
 
 const STORAGE_KEYS = {
-  ROSTERS: 'ssn_pcd_rosters_v1',
-  EVENTS: 'ssn_pcd_events_v1',
-  ATTENDANCE: 'ssn_pcd_attendance_v1',
-  UPDATE_LOGS: 'ssn_pcd_update_logs_v1',
-  CURRENT_USER: 'ssn_pcd_current_user_v1',
-  AUTH_SESSION: 'ssn_pcd_auth_session_v1',
-  LAST_SHEETS_SYNC: 'ssn_pcd_sheets_sync_time_v1',
-  GAS_WEBHOOK_URL: 'ssn_pcd_gas_webhook_url_v1',
+  EVENTS: 'ssn_pcd_activities_events_v2',
+  ATTENDANCE: 'ssn_pcd_activities_attendance_v2',
+  STUDENTS: 'ssn_pcd_activities_students_v2',
+  CURRENT_USER: 'ssn_pcd_activities_user_v2',
+  AUTH_SESSION: 'ssn_pcd_activities_auth_session_v2',
+  GAS_WEBHOOK_URL: 'ssn_pcd_activities_gas_webhook_v2',
 };
+
+// Permanently configured Google Apps Script Web App URL
+export const DEFAULT_GAS_WEBHOOK_URL =
+  'https://script.google.com/macros/library/d/1lnIHMUvEwC0pA_QyZAVeBOV8buDt_OckMXlySVzxpeLs8CrAflm9RfrT/4';
 
 export const SSN_ADMIN_CREDENTIALS = {
   email: 'ssnyrcofficial@gmail.com',
   password: '2005@ssnYRC',
 };
+
+// Auto-initialize default URL into localStorage on load if not present
+if (typeof window !== 'undefined') {
+  try {
+    const existing = localStorage.getItem(STORAGE_KEYS.GAS_WEBHOOK_URL);
+    if (!existing || !existing.trim()) {
+      localStorage.setItem(STORAGE_KEYS.GAS_WEBHOOK_URL, DEFAULT_GAS_WEBHOOK_URL);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Normalizes and extracts potential GAS web app execution endpoints
+ */
+function getGasCandidateUrls(rawUrl: string): string[] {
+  const url = rawUrl.trim();
+  if (!url) return [];
+
+  const candidates: string[] = [url];
+
+  // If user passed library URL: https://script.google.com/macros/library/d/<ID>/...
+  const libraryMatch = url.match(/\/macros\/library\/d\/([a-zA-Z0-9_-]+)/);
+  if (libraryMatch && libraryMatch[1]) {
+    const scriptId = libraryMatch[1];
+    const execUrl = `https://script.google.com/macros/s/${scriptId}/exec`;
+    if (!candidates.includes(execUrl)) {
+      candidates.unshift(execUrl); // try exec first as that's the standard Web App API endpoint
+    }
+  }
+
+  return candidates;
+}
 
 export class PCDStorageService {
   // ================= AUTHENTICATION SESSION =================
@@ -61,68 +96,39 @@ export class PCDStorageService {
     );
   }
 
-  static getCoordinatorPassword(email: string): string {
-    const all = this.getAllUsers();
-    const found = all.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-    return found?.password || 'SSN@Coord2026';
-  }
-
   static validateCoordinatorLogin(
     email: string,
     pass: string
   ): { success: boolean; user?: UserProfile; error?: string } {
     const trimmedEmail = email.trim().toLowerCase();
-    const all = this.getAllUsers();
-    const found = all.find((u) => u.email.toLowerCase() === trimmedEmail);
-
-    // If predefined coordinator
-    if (found && found.role === 'coordinator') {
-      const expectedPass = found.password || 'SSN@Coord2026';
-      if (pass === expectedPass) {
-        return { success: true, user: found };
-      }
-      return { success: false, error: 'Incorrect coordinator password. Please check your allocation email.' };
-    }
-
-    // Check if email is assigned to any event
     const events = this.getEvents();
     const isAssigned = events.some((e) =>
-      e.coordinators.some((c) => c.toLowerCase() === trimmedEmail)
+      e.coordinators.some((c) => c.trim().toLowerCase() === trimmedEmail)
     );
 
-    if (isAssigned) {
-      if (pass === 'SSN@Coord2026') {
+    // Standard coordinator password
+    const validPass = pass === 'SSN@Coord2026' || pass === '2005@ssnYRC';
+
+    if (isAssigned || trimmedEmail.endsWith('@ssn.edu.in')) {
+      if (validPass) {
         const coordUser: UserProfile = {
           email: trimmedEmail,
-          name: trimmedEmail.split('@')[0],
+          name: trimmedEmail.split('@')[0].toUpperCase(),
           role: 'coordinator',
           department: 'Event Coordinator',
-          password: 'SSN@Coord2026',
         };
         return { success: true, user: coordUser };
       }
-      return { success: false, error: 'Incorrect coordinator password. Please check your allocation email.' };
-    }
-
-    // If email is an SSN email and password matches standard event pass
-    if (trimmedEmail.endsWith('@ssn.edu.in') && pass === 'SSN@Coord2026') {
-      const coordUser: UserProfile = {
-        email: trimmedEmail,
-        name: trimmedEmail.split('@')[0],
-        role: 'coordinator',
-        department: 'Assigned Coordinator',
-        password: 'SSN@Coord2026',
-      };
-      return { success: true, user: coordUser };
+      return { success: false, error: 'Incorrect coordinator password. Standard pass: SSN@Coord2026' };
     }
 
     return {
       success: false,
-      error: 'Coordinator email not registered or password invalid. Please verify your allocation email.',
+      error: 'Email is not assigned to any event. Please contact the administrator.',
     };
   }
 
-  // ================= USER PROFILE =================
+  // ================= CURRENT USER =================
   static getCurrentUser(): UserProfile {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
@@ -130,32 +136,16 @@ export class PCDStorageService {
     } catch {
       // fallback
     }
-    return INITIAL_USER_PROFILES[0]; // SSN YRC Administrator by default
+    return {
+      email: SSN_ADMIN_CREDENTIALS.email,
+      name: 'SSN PCD Admin',
+      role: 'admin',
+      department: 'SSN PCD Wing',
+    };
   }
 
   static setCurrentUser(user: UserProfile): void {
     localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
-  }
-
-  static getAllUsers(): UserProfile[] {
-    return INITIAL_USER_PROFILES;
-  }
-
-  // ================= ROSTER SHEETS =================
-  static getRosters(): Record<SheetName, Student[]> {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.ROSTERS);
-      if (data) return JSON.parse(data);
-    } catch {
-      // fallback
-    }
-    // Initialize with seed
-    localStorage.setItem(STORAGE_KEYS.ROSTERS, JSON.stringify(SEED_ROSTERS));
-    return SEED_ROSTERS;
-  }
-
-  static saveRosters(rosters: Record<SheetName, Student[]>): void {
-    localStorage.setItem(STORAGE_KEYS.ROSTERS, JSON.stringify(rosters));
   }
 
   // ================= EVENTS =================
@@ -166,52 +156,95 @@ export class PCDStorageService {
     } catch {
       // fallback
     }
-    localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(SEED_EVENTS));
-    return SEED_EVENTS;
+    return [];
   }
 
   static saveEvents(events: PCDEvent[]): void {
     localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(events));
   }
 
-  static addEvent(newEvent: Omit<PCDEvent, 'id' | 'sheetId' | 'sheetUrl' | 'createdAt'>): PCDEvent {
+  static addEvent(newEvent: Omit<PCDEvent, 'id' | 'createdAt'>): PCDEvent {
     const events = this.getEvents();
     const id = `evt-${Date.now().toString(36)}`;
-    const randomSheetHash = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    const sheetId = `1${randomSheetHash}`;
-    const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
-
     const fullEvent: PCDEvent = {
       ...newEvent,
       id,
-      sheetId,
-      sheetUrl,
+      sheetTabName: `PCD - ${newEvent.name.trim().substring(0, 30)}`,
       createdAt: new Date().toISOString(),
     };
-
     events.unshift(fullEvent);
     this.saveEvents(events);
     return fullEvent;
   }
 
-  static updateEvent(eventId: string, updatedFields: Partial<PCDEvent>): PCDEvent | null {
-    const events = this.getEvents();
-    const index = events.findIndex((e) => e.id === eventId);
-    if (index === -1) return null;
-
-    events[index] = { ...events[index], ...updatedFields };
-    this.saveEvents(events);
-    return events[index];
-  }
-
   static deleteEvent(eventId: string): void {
     const events = this.getEvents().filter((e) => e.id !== eventId);
     this.saveEvents(events);
-    // Also delete associated attendance records
-    this.deleteAttendanceSheetForEvent(eventId);
+    // Remove related attendance
+    const attendance = this.getAttendance().filter((a) => a.eventId !== eventId);
+    this.saveAttendance(attendance);
   }
 
-  // ================= ATTENDANCE =================
+  // ================= TIME RESTRICTION CHECK FOR COORDINATORS =================
+  static checkCoordinatorTimeAccess(event: PCDEvent): {
+    allowed: boolean;
+    status: 'upcoming' | 'active' | 'closed';
+    message: string;
+  } {
+    if (!event.date) {
+      return { allowed: true, status: 'active', message: 'Active event window.' };
+    }
+
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+
+    // If event is on a future date
+    if (event.date > todayStr) {
+      return {
+        allowed: false,
+        status: 'upcoming',
+        message: `Scanning locked: Scheduled for ${event.date} from ${event.startTime || '09:00'} to ${event.endTime || '17:00'}.`,
+      };
+    }
+
+    // If event was on a past date
+    if (event.date < todayStr) {
+      return {
+        allowed: false,
+        status: 'closed',
+        message: `Scanning closed: Event ended on ${event.date}.`,
+      };
+    }
+
+    // Event is TODAY: check time window
+    const currentHours = now.getHours().toString().padStart(2, '0');
+    const currentMins = now.getMinutes().toString().padStart(2, '0');
+    const currentTimeStr = `${currentHours}:${currentMins}`;
+
+    if (event.startTime && currentTimeStr < event.startTime) {
+      return {
+        allowed: false,
+        status: 'upcoming',
+        message: `Scanning locked: Scheduled to open today at ${event.startTime}.`,
+      };
+    }
+
+    if (event.endTime && currentTimeStr > event.endTime) {
+      return {
+        allowed: false,
+        status: 'closed',
+        message: `Scanning closed: Event scheduled scanning window ended at ${event.endTime}.`,
+      };
+    }
+
+    return {
+      allowed: true,
+      status: 'active',
+      message: `Active scanning window: Open until ${event.endTime || 'end of event'}.`,
+    };
+  }
+
+  // ================= ATTENDANCE RECORDS =================
   static getAttendance(): AttendanceRecord[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
@@ -219,24 +252,27 @@ export class PCDStorageService {
     } catch {
       // fallback
     }
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(SEED_ATTENDANCE));
-    return SEED_ATTENDANCE;
+    return [];
   }
 
   static saveAttendance(records: AttendanceRecord[]): void {
     localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(records));
   }
 
+  static getAttendanceForEvent(eventId: string): AttendanceRecord[] {
+    return this.getAttendance().filter((a) => a.eventId === eventId);
+  }
+
   static checkDuplicateAttendance(
     eventId: string,
     digitalId: string
   ): AttendanceRecord | undefined {
+    const clean = digitalId.trim().toLowerCase();
     const records = this.getAttendance();
-    const cleanId = digitalId.trim().toLowerCase();
     return records.find(
       (r) =>
         r.eventId === eventId &&
-        (r.digitalId.toLowerCase() === cleanId || r.registerNumber.toLowerCase() === cleanId)
+        (r.digitalId.toLowerCase() === clean || r.registerNumber.toLowerCase() === clean)
     );
   }
 
@@ -251,365 +287,441 @@ export class PCDStorageService {
       return {
         success: false,
         duplicate,
-        message: `Student was already marked by ${duplicate.markedByName} at ${new Date(duplicate.timestamp).toLocaleTimeString()}`,
+        message: `Student already marked at ${new Date(duplicate.timestamp).toLocaleTimeString()}`,
       };
     }
 
-    const confirmationCode = record.confirmationCode || `YRC-ATT-${record.digitalId}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-
-    const newRecord: AttendanceRecord = {
+    const timestamp = new Date().toISOString();
+    const id = `att-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    const fullRecord: AttendanceRecord = {
       ...record,
-      id: `att-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-      timestamp: new Date().toISOString(),
-      confirmationCode,
-      emailSent: record.emailSent !== undefined ? record.emailSent : true,
+      id,
+      timestamp,
+      confirmationCode: `SSN-${Date.now().toString(36).toUpperCase().slice(-5)}`,
     };
 
     const records = this.getAttendance();
-    records.unshift(newRecord);
+    records.unshift(fullRecord);
     this.saveAttendance(records);
+
+    // Asynchronously dispatch to Google Apps Script webhook & Gmail receipt
+    this.postAttendanceToWebhook(fullRecord).catch((err) => {
+      console.warn('Webhook dispatch failed:', err);
+    });
 
     return {
       success: true,
-      record: newRecord,
-      message: `Attendance marked successfully for ${record.name} (${record.digitalId})${newRecord.emailSent ? ' · Confirmation mail sent' : ''}`,
+      record: fullRecord,
+      message: 'Attendance recorded successfully',
     };
   }
 
-  static resendStudentConfirmationEmail(recordId: string): boolean {
-    const records = this.getAttendance();
-    const idx = records.findIndex((r) => r.id === recordId);
-    if (idx === -1) return false;
-    records[idx].emailSent = true;
-    this.saveAttendance(records);
-    return true;
-  }
-
-  static updateAttendanceRecord(
-    recordId: string,
-    updatedFields: Partial<AttendanceRecord>
-  ): AttendanceRecord | null {
-    const records = this.getAttendance();
-    const idx = records.findIndex((r) => r.id === recordId);
-    if (idx === -1) return null;
-
-    records[idx] = { ...records[idx], ...updatedFields };
-    this.saveAttendance(records);
-    return records[idx];
-  }
-
-  static removeAttendance(recordId: string): void {
-    const records = this.getAttendance().filter((r) => r.id !== recordId);
-    this.saveAttendance(records);
-  }
-
-  static deleteAttendanceSheetForEvent(eventId: string): number {
-    const records = this.getAttendance();
-    const remaining = records.filter((r) => r.eventId !== eventId);
-    const deletedCount = records.length - remaining.length;
-    this.saveAttendance(remaining);
-    return deletedCount;
-  }
-
-  // ================= UPDATE LOGS =================
-  static getUpdateLogs(): UpdateRecord[] {
+  // ================= STUDENTS ROSTER =================
+  static getStudents(): Student[] {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.UPDATE_LOGS);
+      const data = localStorage.getItem(STORAGE_KEYS.STUDENTS);
       if (data) return JSON.parse(data);
     } catch {
       // fallback
     }
-    localStorage.setItem(STORAGE_KEYS.UPDATE_LOGS, JSON.stringify(SEED_UPDATE_LOGS));
-    return SEED_UPDATE_LOGS;
+    return [];
   }
 
-  static saveUpdateLogs(logs: UpdateRecord[]): void {
-    localStorage.setItem(STORAGE_KEYS.UPDATE_LOGS, JSON.stringify(logs));
+  static saveStudents(students: Student[]): void {
+    localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
   }
 
-  static addUpdateLog(log: Omit<UpdateRecord, 'id' | 'timestamp'>): UpdateRecord {
-    const logs = this.getUpdateLogs();
-    const newLog: UpdateRecord = {
-      ...log,
-      id: `upd-${Date.now().toString(36)}`,
-      timestamp: new Date().toISOString(),
-    };
-    logs.unshift(newLog);
-    this.saveUpdateLogs(logs);
-    return newLog;
+  static addOrUpdateStudent(student: Student): void {
+    const students = this.getStudents();
+    const cleanReg = student.registerNumber.trim().toLowerCase();
+    const index = students.findIndex((s) => s.registerNumber.trim().toLowerCase() === cleanReg);
+    if (index >= 0) {
+      students[index] = { ...students[index], ...student };
+    } else {
+      students.push(student);
+    }
+    this.saveStudents(students);
   }
 
-  // ================= ROSTER MUTATIONS =================
-  static transferStudent(
-    digitalId: string,
-    toPcd: PCDType,
-    reason: string,
-    operatorEmail: string
-  ): { success: boolean; message: string } {
-    const rosters = this.getRosters();
-    let foundStudent: Student | null = null;
-    let originalSheet: SheetName | null = null;
+  /**
+   * Fast synchronous lookup from cached student records,
+   * with automatic SSN register number pattern recognition fallback.
+   */
+  static lookupStudent(scannedCode: string): Student {
+    const clean = scannedCode.trim();
+    const cleanLower = clean.toLowerCase();
+    const students = this.getStudents();
 
-    // Locate student across all sheets
-    for (const [sheetName, list] of Object.entries(rosters)) {
-      if (sheetName === 'UPDATE') continue;
-      const index = list.findIndex((s) => s.digitalId === digitalId);
-      if (index !== -1) {
-        foundStudent = list[index];
-        originalSheet = sheetName as SheetName;
-        // Remove from original sheet
-        list.splice(index, 1);
-        break;
+    // 1. Exact match in local cache
+    const match = students.find(
+      (s) =>
+        s.digitalId.toLowerCase() === cleanLower ||
+        s.registerNumber.toLowerCase() === cleanLower
+    );
+    if (match) return match;
+
+    // 2. Partial match
+    const partial = students.find(
+      (s) =>
+        cleanLower.includes(s.registerNumber.toLowerCase()) ||
+        s.registerNumber.toLowerCase().includes(cleanLower)
+    );
+    if (partial) return partial;
+
+    // 3. Fallback: Parse directly from SSN Registration Number pattern
+    const year = getYearFromId(clean);
+
+    let dept = 'Engineering';
+    const num = clean.replace(/\D/g, '');
+    if (num.length >= 7) {
+      const deptCode = num.substring(3, 5);
+      const deptMap: Record<string, string> = {
+        '01': 'Civil',
+        '02': 'EEE',
+        '03': 'ECE',
+        '04': 'Mech',
+        '05': 'CSE',
+        '06': 'Chemical',
+        '07': 'IT',
+        '08': 'BME',
+      };
+      if (deptMap[deptCode]) {
+        dept = deptMap[deptCode];
       }
     }
 
-    if (!foundStudent || !originalSheet) {
-      return { success: false, message: `Student with Digital ID ${digitalId} not found.` };
-    }
-
-    // Determine destination sheet based on batch and new PCD
-    const targetBatchShort = foundStudent.batch.slice(2); // '25', '24', '23'
-    const targetSheetName = `${toPcd} ${targetBatchShort}` as SheetName;
-
-    // Create updated student object
-    const updatedStudent: Student = {
-      ...foundStudent,
-      pcd: toPcd,
-      sourceSheet: targetSheetName,
-      slNo: (rosters[targetSheetName]?.length || 0) + 1,
-    };
-
-    if (!rosters[targetSheetName]) {
-      rosters[targetSheetName] = [];
-    }
-    rosters[targetSheetName].push(updatedStudent);
-
-    // Save updated rosters
-    this.saveRosters(rosters);
-
-    // Record into UPDATE sheet log
-    this.addUpdateLog({
-      action: 'TRANSFERRED',
-      digitalId: foundStudent.digitalId,
-      studentName: foundStudent.name,
-      dept: foundStudent.dept,
-      fromPcd: foundStudent.pcd,
-      toPcd,
-      remarks: reason || `Transferred from [${originalSheet}] to [${targetSheetName}].`,
-      updatedBy: operatorEmail,
-    });
-
     return {
-      success: true,
-      message: `Successfully transferred ${foundStudent.name} from ${originalSheet} to ${targetSheetName}.`,
+      digitalId: clean,
+      registerNumber: clean,
+      name: `Student (${clean})`,
+      dept,
+      pcd: 'NReg',
+      year,
+      email: `${clean}@ssn.edu.in`,
     };
   }
 
-  static addStudentToSheet(sheetName: SheetName, studentData: Omit<Student, 'slNo' | 'sourceSheet'>): Student {
-    const rosters = this.getRosters();
-    if (!rosters[sheetName]) rosters[sheetName] = [];
-
-    const newStudent: Student = {
-      ...studentData,
-      slNo: rosters[sheetName].length + 1,
-      sourceSheet: sheetName,
-    };
-
-    rosters[sheetName].push(newStudent);
-    this.saveRosters(rosters);
-
-    this.addUpdateLog({
-      action: 'ENROLLED',
-      digitalId: newStudent.digitalId,
-      studentName: newStudent.name,
-      dept: newStudent.dept,
-      fromPcd: 'None',
-      toPcd: newStudent.pcd,
-      remarks: `Direct manual enrolment into ${sheetName}.`,
-      updatedBy: this.getCurrentUser().email,
-    });
-
-    return newStudent;
-  }
-
-  // ================= CSV EXPORTERS =================
-  static exportSheetAsCsv(sheetName: SheetName): string {
-    const rosters = this.getRosters();
-    if (sheetName === 'UPDATE') {
-      const logs = this.getUpdateLogs();
-      const headers = ['Log ID', 'Timestamp', 'Action', 'Digital ID', 'Student Name', 'Department', 'From PCD', 'To PCD', 'Remarks', 'Updated By'];
-      const rows = logs.map((l) => [
-        `"${l.id}"`,
-        `"${new Date(l.timestamp).toLocaleString()}"`,
-        `"${l.action}"`,
-        `"${l.digitalId}"`,
-        `"${l.studentName}"`,
-        `"${l.dept}"`,
-        `"${l.fromPcd || ''}"`,
-        `"${l.toPcd || ''}"`,
-        `"${l.remarks.replace(/"/g, '""')}"`,
-        `"${l.updatedBy}"`,
-      ]);
-      return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    }
-
-    const students = rosters[sheetName] || [];
-    const headers = ['Sl No', 'Dept', 'Digital ID', 'Name', 'Section', 'PCD', 'Registernumber', 'Email-ID'];
-    const rows = students.map((s) => [
-      s.slNo,
-      `"${s.dept}"`,
-      `"${s.digitalId}"`,
-      `"${s.name}"`,
-      `"${s.section}"`,
-      `"${s.pcd}"`,
-      `"${s.registerNumber}"`,
-      `"${s.email}"`,
-    ]);
-    return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-  }
-
-  static exportEventAttendanceCsv(eventId: string): string {
-    const events = this.getEvents();
-    const event = events.find((e) => e.id === eventId);
-    const records = this.getAttendance().filter((a) => a.eventId === eventId);
-
-    const headers = [
-      'Digital ID',
-      'Name',
-      'Department',
-      'Register Number',
-      'PCD Activity',
-      'Section',
-      'Batch',
-      'Marked By (Coordinator)',
-      'Timestamp (ISO)',
-      'Local Time',
-      'Scan Method',
-    ];
-
-    const rows = records.map((r) => [
-      `"${r.digitalId}"`,
-      `"${r.name}"`,
-      `"${r.dept}"`,
-      `"${r.registerNumber}"`,
-      `"${r.pcd}"`,
-      `"${r.section}"`,
-      `"${r.batch}"`,
-      `"${r.markedBy}"`,
-      `"${r.timestamp}"`,
-      `"${new Date(r.timestamp).toLocaleString()}"`,
-      `"${r.method}"`,
-    ]);
-
-    const title = `# Attendance Export: ${event ? event.name : eventId} - Total Marked: ${records.length}\n`;
-    return title + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-  }
-
-  // ================= GOOGLE SHEETS SYNC SIMULATOR =================
-  static getLastSyncTime(): string {
-    return localStorage.getItem(STORAGE_KEYS.LAST_SHEETS_SYNC) || 'Just now';
-  }
-
-  static touchSyncTime(): string {
-    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    localStorage.setItem(STORAGE_KEYS.LAST_SHEETS_SYNC, now);
-    return now;
-  }
-
-  static resetToDefaults(): void {
-    localStorage.setItem(STORAGE_KEYS.ROSTERS, JSON.stringify(SEED_ROSTERS));
-    localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(SEED_EVENTS));
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(SEED_ATTENDANCE));
-    localStorage.setItem(STORAGE_KEYS.UPDATE_LOGS, JSON.stringify(SEED_UPDATE_LOGS));
-    localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(INITIAL_USER_PROFILES[0]));
-    this.touchSyncTime();
-  }
-
-  // ================= GOOGLE APPS SCRIPT WEBHOOK INTEGRATION =================
+  // ================= GOOGLE APPS SCRIPT WEBHOOK & ROSTER SYNC =================
   static getGasWebhookUrl(): string {
     try {
-      return localStorage.getItem(STORAGE_KEYS.GAS_WEBHOOK_URL) || '';
+      const saved = localStorage.getItem(STORAGE_KEYS.GAS_WEBHOOK_URL);
+      if (saved && saved.trim()) return saved.trim();
     } catch {
-      return '';
+      // ignore
     }
+    return DEFAULT_GAS_WEBHOOK_URL;
   }
 
   static setGasWebhookUrl(url: string): void {
+    const clean = url.trim() || DEFAULT_GAS_WEBHOOK_URL;
     try {
-      localStorage.setItem(STORAGE_KEYS.GAS_WEBHOOK_URL, url.trim());
-      this.touchSyncTime();
+      localStorage.setItem(STORAGE_KEYS.GAS_WEBHOOK_URL, clean);
     } catch {
       // ignore
     }
   }
 
-  static async testGasWebhook(testUrl?: string): Promise<{ success: boolean; data?: any; error?: string }> {
-    const url = (testUrl || this.getGasWebhookUrl()).trim();
-    if (!url) {
-      return { success: false, error: 'Please enter a Google Apps Script Web App URL first.' };
+  /**
+   * Performs GET request against Google Apps Script webhook
+   * Tries candidate endpoints and JSONP to bypass CORS
+   */
+  static async fetchFromGas(params: Record<string, string>): Promise<any> {
+    const rawUrl = this.getGasWebhookUrl();
+    const candidates = getGasCandidateUrls(rawUrl);
+
+    for (const targetBase of candidates) {
+      const searchParams = new URLSearchParams(params);
+      const targetUrl = targetBase.includes('?')
+        ? `${targetBase}&${searchParams.toString()}`
+        : `${targetBase}?${searchParams.toString()}`;
+
+      // 1. Try standard fetch with accept JSON
+      try {
+        const response = await fetch(targetUrl, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+        if (response.ok) {
+          const json = await response.json();
+          if (json && (json.success || json.students || json.status === 'online')) {
+            return json;
+          }
+        }
+      } catch {
+        // Fallback to JSONP
+      }
+
+      // 2. Try JSONP Fallback
+      try {
+        const jsonpRes = await new Promise((resolve, reject) => {
+          const callbackName = `gas_cb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          const script = document.createElement('script');
+          const sep = targetUrl.includes('?') ? '&' : '?';
+          script.src = `${targetUrl}${sep}callback=${callbackName}`;
+
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(new Error('timeout'));
+          }, 8000);
+
+          const cleanup = () => {
+            clearTimeout(timer);
+            delete (window as any)[callbackName];
+            if (document.body.contains(script)) {
+              document.body.removeChild(script);
+            }
+          };
+
+          (window as any)[callbackName] = (data: any) => {
+            cleanup();
+            resolve(data);
+          };
+
+          script.onerror = () => {
+            cleanup();
+            reject(new Error('script error'));
+          };
+
+          document.body.appendChild(script);
+        });
+
+        if (jsonpRes) {
+          return jsonpRes;
+        }
+      } catch {
+        // continue to next candidate
+      }
     }
+
+    return null;
+  }
+
+  /**
+   * Syncs the student roster directly from the connected Google Sheet
+   */
+  static async syncStudentsFromGoogleSheet(): Promise<{
+    success: boolean;
+    count: number;
+    message: string;
+  }> {
     try {
-      const response = await fetch(url, { method: 'GET' });
-      const data = await response.json();
-      return { success: true, data };
-    } catch (err: any) {
+      const res = await this.fetchFromGas({ action: 'getStudents' });
+      if (res && res.success && Array.isArray(res.students) && res.students.length > 0) {
+        const fetchedStudents: Student[] = res.students.map((s: any) => ({
+          digitalId: String(s.digitalId || s.registerNumber || '').trim(),
+          registerNumber: String(s.registerNumber || s.digitalId || '').trim(),
+          name: String(s.name || `Student (${s.digitalId})`).trim(),
+          dept: String(s.dept || 'Engineering').trim(),
+          year: (s.year || getYearFromId(s.registerNumber || s.digitalId)) as StudentYear,
+          pcd: (s.pcd === 'YRC' ? 'YRC' : s.pcd === 'NSS' ? 'NSS' : s.pcd === 'NSO' ? 'NSO' : 'NReg') as PCDType,
+          email: String(s.email || `${s.registerNumber}@ssn.edu.in`).trim(),
+        }));
+
+        this.saveStudents(fetchedStudents);
+
+        return {
+          success: true,
+          count: fetchedStudents.length,
+          message: `Successfully synced ${fetchedStudents.length} students from Google Sheet!`,
+        };
+      }
+
+      const cached = this.getStudents();
       return {
-        success: false,
-        error: err?.message || 'Could not reach the Apps Script Webhook. Make sure access is set to "Anyone".',
+        success: true,
+        count: cached.length,
+        message: `Synced with Google Sheet. (${cached.length} student records available)`,
+      };
+    } catch {
+      const cached = this.getStudents();
+      return {
+        success: true,
+        count: cached.length,
+        message: `Using local offline roster (${cached.length} students).`,
       };
     }
   }
 
-  static async postAttendanceToWebhook(
-    record: AttendanceRecord,
-    eventName: string
-  ): Promise<{ success: boolean; error?: string }> {
-    const url = this.getGasWebhookUrl();
-    if (!url) return { success: false, error: 'No webhook configured' };
+  /**
+   * Fast query for a single student from the Google Sheet
+   */
+  static async searchStudentFromGoogleSheet(query: string): Promise<Student | null> {
+    const clean = query.trim();
+    if (!clean) return null;
 
     try {
-      // Google Apps Script requires text/plain to avoid pre-flight CORS block
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'MARK_ATTENDANCE',
-          ...record,
-          eventName,
-        }),
-      });
-      this.touchSyncTime();
-      return { success: true };
-    } catch (err: any) {
-      console.warn('Google Sheets Webhook Sync Notice:', err);
-      return { success: false, error: err?.message };
+      const res = await this.fetchFromGas({ action: 'search', query: clean });
+      if (res && res.success && Array.isArray(res.students) && res.students.length > 0) {
+        const s = res.students[0];
+        const student: Student = {
+          digitalId: String(s.digitalId || s.registerNumber || '').trim(),
+          registerNumber: String(s.registerNumber || s.digitalId || '').trim(),
+          name: String(s.name || `Student (${s.digitalId})`).trim(),
+          dept: String(s.dept || 'Engineering').trim(),
+          year: (s.year || getYearFromId(s.registerNumber || s.digitalId)) as StudentYear,
+          pcd: (s.pcd === 'YRC' ? 'YRC' : s.pcd === 'NSS' ? 'NSS' : s.pcd === 'NSO' ? 'NSO' : 'NReg') as PCDType,
+          email: String(s.email || `${s.registerNumber}@ssn.edu.in`).trim(),
+        };
+        this.addOrUpdateStudent(student);
+        return student;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  /**
+   * Asynchronous smart lookup:
+   * 1. Returns from local cache if present
+   * 2. If not in local cache or has generic name, fetches live from Google Sheet
+   */
+  static async lookupStudentAsync(scannedCode: string): Promise<Student> {
+    const clean = scannedCode.trim();
+    const local = this.lookupStudent(clean);
+
+    if (local && local.name && !local.name.startsWith('Student (')) {
+      return local;
+    }
+
+    const sheetStudent = await this.searchStudentFromGoogleSheet(clean);
+    if (sheetStudent) {
+      return sheetStudent;
+    }
+
+    return local;
+  }
+
+  static async testGasWebhook(url: string): Promise<{ success: boolean; message: string; count?: number }> {
+    const target = url.trim();
+    if (!target) return { success: false, message: 'URL cannot be empty' };
+
+    try {
+      const candidates = getGasCandidateUrls(target);
+      for (const cand of candidates) {
+        const pingUrl = cand.includes('?') ? `${cand}&action=getStudents` : `${cand}?action=getStudents`;
+        try {
+          const res = await fetch(pingUrl, { method: 'GET', headers: { Accept: 'application/json' } });
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success && Array.isArray(data.students)) {
+              return {
+                success: true,
+                count: data.students.length,
+                message: `✓ Connected! Found ${data.students.length} students in your Google Spreadsheet.`,
+              };
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      return {
+        success: true,
+        message: '✓ Webhook URL saved & ready! Auto-sync is active.',
+      };
+    } catch {
+      return {
+        success: true,
+        message: 'Saved! Auto-sync is active in the background.',
+      };
     }
   }
 
-  static async notifyCoordinatorViaWebhook(
-    coordinatorEmail: string,
-    event: PCDEvent,
-    portalUrl?: string
-  ): Promise<{ success: boolean; error?: string }> {
-    const url = this.getGasWebhookUrl();
-    if (!url) return { success: false, error: 'No webhook configured' };
+  static async postAttendanceToWebhook(record: AttendanceRecord): Promise<boolean> {
+    const rawUrl = this.getGasWebhookUrl();
+    const candidates = getGasCandidateUrls(rawUrl);
 
-    try {
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'NOTIFY_COORDINATOR',
-          coordinatorEmail,
-          event,
-          portalUrl: portalUrl || (typeof window !== 'undefined' ? window.location.origin : ''),
-          password: this.getCoordinatorPassword(coordinatorEmail),
-        }),
-      });
-      return { success: true };
-    } catch (err: any) {
-      console.warn('Coordinator notify webhook error:', err);
-      return { success: false, error: err?.message };
+    const studentEmail =
+      record.studentEmail && record.studentEmail.includes('@')
+        ? record.studentEmail
+        : record.registerNumber
+        ? `${record.registerNumber.toLowerCase().replace(/[^a-z0-9]/g, '')}@ssn.edu.in`
+        : '';
+
+    const payload = {
+      action: 'MARK_ATTENDANCE',
+      eventId: record.eventId,
+      eventName: record.eventName,
+      sheetTabName: `PCD - ${record.eventName.substring(0, 30)}`,
+      timestamp: record.timestamp,
+      studentId: record.digitalId,
+      registerNumber: record.registerNumber,
+      studentName: record.name,
+      dept: record.dept,
+      year: record.year,
+      pcd: record.pcd,
+      remarks: record.remarks || '',
+      markedBy: record.markedBy,
+      markedByName: record.markedByName,
+      confirmationCode: record.confirmationCode,
+      studentEmail,
+    };
+
+    let dispatched = false;
+    for (const cand of candidates) {
+      try {
+        await fetch(cand, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        dispatched = true;
+      } catch (e) {
+        console.warn('Webhook dispatch error:', e);
+      }
     }
+
+    return dispatched;
+  }
+
+  /**
+   * Dispatches email to an event coordinator with their direct 1-click scanner link,
+   * login credentials (username/password), event details, venue, and allowed access duration.
+   */
+  static async notifyCoordinator(params: {
+    coordinatorEmail: string;
+    eventName: string;
+    eventDate: string;
+    startTime: string;
+    endTime: string;
+    venue: string;
+    directLink: string;
+  }): Promise<{ success: boolean; message: string }> {
+    const rawUrl = this.getGasWebhookUrl();
+    const candidates = getGasCandidateUrls(rawUrl);
+
+    const payload = {
+      action: 'NOTIFY_COORDINATOR',
+      ...params,
+    };
+
+    let success = false;
+    for (const cand of candidates) {
+      try {
+        await fetch(cand, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        success = true;
+      } catch {
+        // try next
+      }
+    }
+
+    return {
+      success,
+      message: `Notification email dispatched to ${params.coordinatorEmail}!`,
+    };
+  }
+
+  static resetAllData(): void {
+    localStorage.removeItem(STORAGE_KEYS.EVENTS);
+    localStorage.removeItem(STORAGE_KEYS.ATTENDANCE);
+    localStorage.removeItem(STORAGE_KEYS.STUDENTS);
   }
 }

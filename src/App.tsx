@@ -1,35 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { SheetName, UserProfile } from './types';
+import { PCDEvent, UserProfile } from './types';
 import { PCDStorageService } from './services/storage';
 import { Navbar } from './components/Navbar';
-import { ScannerView } from './components/ScannerView';
 import { EventsView } from './components/EventsView';
-import { RosterSheetsView } from './components/RosterSheetsView';
-import { AttendanceLogsView } from './components/AttendanceLogsView';
+import { DatabaseView } from './components/DatabaseView';
 import { AnalyticsView } from './components/AnalyticsView';
-import { ArchitectureModal } from './components/ArchitectureModal';
-import { YrcEmblem } from './components/YrcEmblem';
+import { ScannerView } from './components/ScannerView';
 import { LoginPage } from './components/LoginPage';
-import {
-  QrCode,
-  Calendar,
-  FileSpreadsheet,
-  CheckCircle2,
-  BarChart3,
-} from 'lucide-react';
+import { SettingsModal } from './components/SettingsModal';
+import { AlertCircle } from 'lucide-react';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'scanner' | 'events' | 'rosters' | 'attendance' | 'analytics'>('scanner');
+  const [currentTab, setCurrentTab] = useState<'events' | 'database' | 'analytics'>('events');
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => PCDStorageService.getCurrentUser());
-  const [events, setEvents] = useState(() => PCDStorageService.getEvents());
-  const [selectedEventId, setSelectedEventId] = useState<string>(() => {
-    const list = PCDStorageService.getEvents();
-    return list[0]?.id || '';
-  });
-  const [rosters, setRosters] = useState(() => PCDStorageService.getRosters());
-  const [updateLogs, setUpdateLogs] = useState(() => PCDStorageService.getUpdateLogs());
+  const [events, setEvents] = useState<PCDEvent[]>(() => PCDStorageService.getEvents());
+  const [targetEventId, setTargetEventId] = useState<string>('');
 
-  // Authentication state - coordinators with direct links bypass, otherwise default to login screen
+  // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -43,12 +30,12 @@ export default function App() {
   });
 
   // Modals
-  const [isArchitectureOpen, setIsArchitectureOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCreateEventModalOpen, setIsCreateEventModalOpen] = useState(false);
 
   const isCoordinator = currentUser.role === 'coordinator';
 
-  // Read URL search parameters on initial load (e.g. ?event=evt-123&coordinator=gokul2470019@ssn.edu.in)
+  // Parse URL search parameters on initial load
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -56,49 +43,36 @@ export default function App() {
     const coordinatorParam = params.get('coordinator') || params.get('email');
 
     if (coordinatorParam) {
-      const allUsers = PCDStorageService.getAllUsers();
-      const existing = allUsers.find(
-        (u) => u.email.toLowerCase() === coordinatorParam.toLowerCase()
-      );
-      const coordUser: UserProfile = existing || {
-        email: coordinatorParam,
-        name: coordinatorParam.split('@')[0],
+      const trimmed = coordinatorParam.trim().toLowerCase();
+      const coordUser: UserProfile = {
+        email: trimmed,
+        name: trimmed.split('@')[0].toUpperCase(),
         role: 'coordinator',
         department: 'Assigned Coordinator',
       };
       setCurrentUser(coordUser);
       PCDStorageService.setAuthSession(coordUser);
       setIsAuthenticated(true);
-      setCurrentTab('scanner');
     }
 
     if (eventParam) {
-      const allEvts = PCDStorageService.getEvents();
-      const found = allEvts.find((e) => e.id === eventParam);
-      if (found) {
-        setSelectedEventId(eventParam);
-        setCurrentTab('scanner');
-      }
+      setTargetEventId(eventParam);
     }
   }, []);
 
-  // Strict role guard: if user is coordinator, keep them locked to the live scanner
+  // Background Auto-Sync with Google Sheets
   useEffect(() => {
-    if (isCoordinator && currentTab !== 'scanner') {
-      setCurrentTab('scanner');
-    }
-  }, [currentUser, isCoordinator, currentTab]);
+    // Initial silent sync on mount
+    PCDStorageService.syncStudentsFromGoogleSheet().catch(() => {});
 
-  // Sync current user change to local storage
-  const handleUserChange = (newUser: UserProfile) => {
-    setCurrentUser(newUser);
-    PCDStorageService.setAuthSession(newUser);
-    if (newUser.role === 'coordinator') {
-      setCurrentTab('scanner');
-    }
-  };
+    // Periodic background sync every 60 seconds
+    const interval = setInterval(() => {
+      PCDStorageService.syncStudentsFromGoogleSheet().catch(() => {});
+    }, 60000);
 
-  // Logout handler
+    return () => clearInterval(interval);
+  }, []);
+
   const handleLogout = () => {
     PCDStorageService.clearAuthSession();
     if (typeof window !== 'undefined') {
@@ -107,18 +81,25 @@ export default function App() {
     setIsAuthenticated(false);
   };
 
-  // Refresh all state from storage
-  const refreshData = () => {
+  const refreshEvents = () => {
     setEvents(PCDStorageService.getEvents());
-    setRosters(PCDStorageService.getRosters());
-    setUpdateLogs(PCDStorageService.getUpdateLogs());
   };
 
-  // When user clicks "Scan Attendance" from an event card
-  const handleSelectEventForScanning = (eventId: string) => {
-    setSelectedEventId(eventId);
-    setCurrentTab('scanner');
-  };
+  // Find assigned event for coordinator
+  let coordinatorEvent: PCDEvent | undefined;
+  if (isCoordinator) {
+    if (targetEventId) {
+      coordinatorEvent = events.find((e) => e.id === targetEventId);
+    }
+    if (!coordinatorEvent) {
+      coordinatorEvent = events.find((e) =>
+        e.coordinators.some((c) => c.toLowerCase() === currentUser.email.toLowerCase())
+      );
+    }
+    if (!coordinatorEvent && events.length > 0) {
+      coordinatorEvent = events[0];
+    }
+  }
 
   // Render Login page if not authenticated
   if (!isAuthenticated) {
@@ -128,190 +109,80 @@ export default function App() {
         onAdminLoginSuccess={(adminUser) => {
           setCurrentUser(adminUser);
           setIsAuthenticated(true);
-          setCurrentTab('scanner');
+          setCurrentTab('events');
         }}
-        onCoordinatorDirectAccess={(coordUser, targetEventId) => {
+        onCoordinatorDirectAccess={(coordUser, eventId) => {
           setCurrentUser(coordUser);
-          if (targetEventId) {
-            setSelectedEventId(targetEventId);
+          if (eventId) {
+            setTargetEventId(eventId);
           }
           setIsAuthenticated(true);
-          setCurrentTab('scanner');
         }}
       />
     );
   }
 
   return (
-    <div className="min-h-screen bg-neutral-50 flex flex-col font-sans antialiased text-neutral-900">
-      {/* 3-Zone Top Navigation Bar */}
+    <div className="min-h-screen bg-neutral-100/70 font-sans text-neutral-900 flex flex-col antialiased selection:bg-neutral-900 selection:text-white">
+      {/* Navigation Header with Mobile Bottom Navigation */}
       <Navbar
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         currentUser={currentUser}
-        setCurrentUser={handleUserChange}
-        onOpenNewEvent={() => {
-          setIsCreateEventModalOpen(true);
-          setCurrentTab('events');
-        }}
-        onOpenArchitecture={() => setIsArchitectureOpen(true)}
+        activeEventName={coordinatorEvent?.name}
+        onOpenNewEvent={() => setIsCreateEventModalOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         onLogout={handleLogout}
       />
 
-      {/* Main View Area */}
-      <main className={`flex-1 ${!isCoordinator ? 'pb-20 md:pb-16' : 'pb-12'}`}>
-        {/* If coordinator, ONLY show the live scanner */}
+      {/* Main Content Area - padded at bottom for mobile sticky navigation */}
+      <main className="flex-1 pb-20 sm:pb-10">
         {isCoordinator ? (
-          <ScannerView
-            events={events}
-            selectedEventId={selectedEventId}
-            setSelectedEventId={setSelectedEventId}
-            currentUser={currentUser}
-            rosters={rosters}
-            onAttendanceUpdated={refreshData}
-          />
+          /* ================= COORDINATOR VIEW ================= */
+          coordinatorEvent ? (
+            <ScannerView
+              event={coordinatorEvent}
+              currentUser={currentUser}
+              onAttendanceUpdated={refreshEvents}
+            />
+          ) : (
+            <div className="max-w-md mx-auto my-12 p-6 bg-white border border-neutral-200 rounded-2xl shadow-xs text-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+                <AlertCircle className="w-6 h-6" />
+              </div>
+              <h2 className="text-base font-bold text-neutral-900">No Event Assigned Yet</h2>
+              <p className="text-xs text-neutral-600">
+                Logged in as <b>{currentUser.email}</b>, but no active PCD event has been assigned to this email address yet.
+              </p>
+              <p className="text-[11px] text-neutral-400">
+                Please contact the SSN PCD Administrator to schedule an event and assign coordinator access.
+              </p>
+            </div>
+          )
         ) : (
-          /* If admin, allow full view switching */
+          /* ================= ADMIN VIEW (3 TABS) ================= */
           <>
-            {currentTab === 'scanner' && (
-              <ScannerView
-                events={events}
-                selectedEventId={selectedEventId}
-                setSelectedEventId={setSelectedEventId}
-                currentUser={currentUser}
-                rosters={rosters}
-                onAttendanceUpdated={refreshData}
-              />
-            )}
-
             {currentTab === 'events' && (
               <EventsView
                 events={events}
                 currentUser={currentUser}
-                onEventCreated={refreshData}
-                onSelectEventForScanning={handleSelectEventForScanning}
+                onEventsChanged={refreshEvents}
                 isCreateModalOpen={isCreateEventModalOpen}
                 setIsCreateModalOpen={setIsCreateEventModalOpen}
               />
             )}
 
-            {currentTab === 'rosters' && (
-              <RosterSheetsView
-                rosters={rosters}
-                updateLogs={updateLogs}
-                currentUser={currentUser}
-                onDataChanged={refreshData}
-              />
-            )}
+            {currentTab === 'database' && <DatabaseView />}
 
-            {currentTab === 'attendance' && (
-              <AttendanceLogsView
-                events={events}
-                currentUser={currentUser}
-                onDataChanged={refreshData}
-              />
-            )}
-
-            {currentTab === 'analytics' && (
-              <AnalyticsView
-                events={events}
-                rosters={rosters}
-              />
-            )}
+            {currentTab === 'analytics' && <AnalyticsView events={events} />}
           </>
         )}
       </main>
 
-      {/* Mobile Fixed Bottom Navigation Bar (ONLY FOR ADMIN - Coordinators have distraction-free screen) */}
-      {!isCoordinator && (
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-neutral-200 grid grid-cols-5 items-center h-16 px-1 shadow-lg">
-          <button
-            onClick={() => setCurrentTab('scanner')}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] cursor-pointer ${
-              currentTab === 'scanner' ? 'text-red-600 font-bold' : 'text-neutral-500'
-            }`}
-          >
-            <QrCode className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Scanner</span>
-          </button>
-          <button
-            onClick={() => setCurrentTab('events')}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] cursor-pointer ${
-              currentTab === 'events' ? 'text-red-600 font-bold' : 'text-neutral-500'
-            }`}
-          >
-            <Calendar className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Events</span>
-          </button>
-          <button
-            onClick={() => setCurrentTab('rosters')}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] cursor-pointer ${
-              currentTab === 'rosters' ? 'text-red-600 font-bold' : 'text-neutral-500'
-            }`}
-          >
-            <FileSpreadsheet className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">13 Sheets</span>
-          </button>
-          <button
-            onClick={() => setCurrentTab('attendance')}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] cursor-pointer ${
-              currentTab === 'attendance' ? 'text-red-600 font-bold' : 'text-neutral-500'
-            }`}
-          >
-            <CheckCircle2 className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Logs</span>
-          </button>
-          <button
-            onClick={() => setCurrentTab('analytics')}
-            className={`flex flex-col items-center justify-center h-full min-h-[44px] cursor-pointer ${
-              currentTab === 'analytics' ? 'text-red-600 font-bold' : 'text-neutral-500'
-            }`}
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Stats</span>
-          </button>
-        </nav>
-      )}
-
-      {/* Footer */}
-      <footer className="border-t border-red-100 bg-white py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-neutral-500">
-          <div className="flex items-center gap-2">
-            <YrcEmblem size={18} />
-            <span className="font-bold text-neutral-800">SSN Youth Red Cross (YRC)</span>
-            <span aria-hidden="true">·</span>
-            <span>13 PCD Sheets · Dynamic Digital ID Routing</span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsArchitectureOpen(true)}
-              className="hover:text-red-700 transition-colors cursor-pointer font-medium"
-            >
-              Routing Architecture
-            </button>
-            <span aria-hidden="true">·</span>
-            <button
-              onClick={() => {
-                if (confirm('Reset application data to initial seed state?')) {
-                  PCDStorageService.resetToDefaults();
-                  refreshData();
-                }
-              }}
-              className="hover:text-red-700 transition-colors cursor-pointer"
-            >
-              Reset Seed Data
-            </button>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono text-[11px]">SSN College of Engineering</span>
-          </div>
-        </div>
-      </footer>
-
-      {/* Architecture & Routing Documentation Modal */}
-      <ArchitectureModal
-        isOpen={isArchitectureOpen}
-        onClose={() => setIsArchitectureOpen(false)}
+      {/* Google Sheet Webhook Settings Modal */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
       />
     </div>
   );

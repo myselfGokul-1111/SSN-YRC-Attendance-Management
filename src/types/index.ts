@@ -1,46 +1,17 @@
 export type PCDType = 'YRC' | 'NSS' | 'NSO' | 'NReg';
 
-export type BatchYear = '2025' | '2024' | '2023';
-
-export type SheetName =
-  | 'YRC 25'
-  | 'NSS 25'
-  | 'NSO 25'
-  | 'NReg 25'
-  | 'YRC 24'
-  | 'NSS 24'
-  | 'NSO 24'
-  | 'NReg 24'
-  | 'YRC 23'
-  | 'NSS 23'
-  | 'NSO 23'
-  | 'NReg 23'
-  | 'UPDATE';
+export type StudentYear = '2nd Year' | '3rd Year' | '4th Year' | '1st Year' | 'Unknown';
 
 export interface Student {
-  slNo: number;
-  dept: string;
+  slNo?: number;
   digitalId: string;
-  name: string;
-  section: string;
-  pcd: PCDType;
   registerNumber: string;
-  email: string;
-  batch: BatchYear;
-  sourceSheet: SheetName;
-}
-
-export interface UpdateRecord {
-  id: string;
-  timestamp: string;
-  action: 'ENROLLED' | 'TRANSFERRED' | 'MODIFIED' | 'REMOVED';
-  digitalId: string;
-  studentName: string;
+  name: string;
   dept: string;
-  fromPcd?: string;
-  toPcd?: string;
-  remarks: string;
-  updatedBy: string;
+  section?: string;
+  pcd: PCDType;
+  year: StudentYear;
+  email?: string;
 }
 
 export interface PCDEvent {
@@ -48,16 +19,13 @@ export interface PCDEvent {
   name: string;
   description: string;
   venue: string;
-  date: string;
-  startTime: string;
-  endTime: string;
+  date: string; // YYYY-MM-DD
+  startTime: string; // HH:mm (24h)
+  endTime: string; // HH:mm (24h)
   targetPcd: 'ALL' | PCDType;
-  targetBatches: BatchYear[];
   coordinators: string[]; // Email addresses
-  sheetId: string;
-  sheetUrl: string;
+  sheetTabName?: string;
   createdAt: string;
-  status: 'upcoming' | 'active' | 'completed';
 }
 
 export interface AttendanceRecord {
@@ -65,18 +33,17 @@ export interface AttendanceRecord {
   eventId: string;
   eventName: string;
   digitalId: string;
+  registerNumber: string;
   name: string;
   dept: string;
-  registerNumber: string;
+  year: StudentYear;
   pcd: PCDType;
-  section: string;
-  batch: BatchYear;
+  remarks?: string;
   markedBy: string; // Coordinator email
   markedByName: string;
   timestamp: string; // ISO string
-  method: 'barcode_scan' | 'qr_scan' | 'manual_input' | 'quick_test';
+  method: 'camera_scan' | 'barcode_scanner' | 'manual_input';
   studentEmail?: string;
-  emailSent?: boolean;
   confirmationCode?: string;
 }
 
@@ -86,15 +53,40 @@ export interface UserProfile {
   email: string;
   name: string;
   role: UserRole;
-  department: string;
+  department?: string;
   password?: string;
 }
 
-export interface RoutingLookupResult {
-  student: Student | null;
-  batchCode: string;
-  targetBatch: BatchYear | 'Unknown';
-  targetSheets: SheetName[];
-  sourceSheet?: SheetName;
-  reasoning: string;
+/**
+ * Maps SSN Register Number / Digital ID prefix to College Year:
+ * - 231XXXX or 237XXXX -> 4th Year
+ * - 241XXXX or 247XXXX -> 3rd Year
+ * - 251XXXX or 257XXXX -> 2nd Year
+ * - 261XXXX or 267XXXX -> 1st Year
+ */
+export function getYearFromId(idOrReg: string): StudentYear {
+  if (!idOrReg) return 'Unknown';
+  const clean = idOrReg.trim().replace(/\D/g, '');
+
+  // Look for 231/237, 241/247, 251/257, 261/267
+  if (clean.startsWith('231') || clean.startsWith('237') || clean.includes('231') || clean.includes('237')) {
+    return '4th Year';
+  }
+  if (clean.startsWith('241') || clean.startsWith('247') || clean.includes('241') || clean.includes('247')) {
+    return '3rd Year';
+  }
+  if (clean.startsWith('251') || clean.startsWith('257') || clean.includes('251') || clean.includes('257')) {
+    return '2nd Year';
+  }
+  if (clean.startsWith('261') || clean.startsWith('267') || clean.includes('261') || clean.includes('267')) {
+    return '1st Year';
+  }
+
+  // Check 2-digit prefix fallback
+  if (clean.startsWith('23')) return '4th Year';
+  if (clean.startsWith('24')) return '3rd Year';
+  if (clean.startsWith('25')) return '2nd Year';
+  if (clean.startsWith('26')) return '1st Year';
+
+  return 'Unknown';
 }
