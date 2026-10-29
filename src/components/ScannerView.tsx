@@ -18,6 +18,7 @@ import {
   Check,
   Mail,
   FlipHorizontal,
+  RefreshCw,
 } from 'lucide-react';
 
 interface ScannerViewProps {
@@ -63,6 +64,61 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     const list = PCDStorageService.getAttendanceForEvent(event.id);
     setRecords(list);
     if (onAttendanceUpdated) onAttendanceUpdated();
+  };
+
+  const [isSyncingAttendance, setIsSyncingAttendance] = useState(false);
+
+  // Periodic multi-device live attendance sync from Google Sheet tab
+  useEffect(() => {
+    let isSubscribed = true;
+    const syncAttendance = async () => {
+      try {
+        await PCDStorageService.syncAttendanceForEvent(
+          event.id,
+          event.name,
+          event.sheetTabName
+        );
+        if (isSubscribed) {
+          const list = PCDStorageService.getAttendanceForEvent(event.id);
+          setRecords(list);
+          if (onAttendanceUpdated) onAttendanceUpdated();
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    syncAttendance();
+    const interval = setInterval(syncAttendance, 20000); // 20s interval
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  }, [event.id]);
+
+  const handleManualAttendanceSync = async () => {
+    setIsSyncingAttendance(true);
+    try {
+      await PCDStorageService.syncAttendanceForEvent(
+        event.id,
+        event.name,
+        event.sheetTabName
+      );
+      refreshRecords();
+      setFeedback({
+        type: 'success',
+        message: '✓ Attendance synced with Google Sheet tab in real-time.',
+      });
+      setTimeout(() => setFeedback(null), 3000);
+    } catch {
+      setFeedback({
+        type: 'warning',
+        message: 'Could not sync attendance. Using local data.',
+      });
+      setTimeout(() => setFeedback(null), 3000);
+    } finally {
+      setIsSyncingAttendance(false);
+    }
   };
 
   const triggerHaptic = (pattern: number[] = [80]) => {
@@ -374,6 +430,16 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             </h2>
 
             <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleManualAttendanceSync}
+                disabled={isSyncingAttendance}
+                className="p-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-xs font-bold cursor-pointer transition-colors min-h-[38px] flex items-center gap-1.5 disabled:opacity-50"
+                title="Sync attendance with Google Sheet tab"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAttendance ? 'animate-spin' : ''}`} />
+                <span className="text-[11px] hidden sm:inline">{isSyncingAttendance ? 'Syncing...' : 'Sync Sheet'}</span>
+              </button>
+
               {isCameraActive && (
                 <button
                   onClick={toggleCameraFacing}

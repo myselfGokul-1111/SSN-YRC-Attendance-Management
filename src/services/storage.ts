@@ -174,15 +174,26 @@ export class PCDStorageService {
     };
     events.unshift(fullEvent);
     this.saveEvents(events);
+
+    // Optimistically create and provision tab in Google Sheets
+    this.createEventOnGas(fullEvent).catch((err) => {
+      console.warn('Google Sheets createEvent sync warning:', err);
+    });
+
     return fullEvent;
   }
 
   static deleteEvent(eventId: string): void {
     const events = this.getEvents().filter((e) => e.id !== eventId);
     this.saveEvents(events);
-    // Remove related attendance
+    // Remove related attendance locally
     const attendance = this.getAttendance().filter((a) => a.eventId !== eventId);
     this.saveAttendance(attendance);
+
+    // Soft archive event in Google Sheet (preserves historical attendance sheet tab)
+    this.deleteEventOnGas(eventId).catch((err) => {
+      console.warn('Google Sheets deleteEvent sync warning:', err);
+    });
   }
 
   // ================= TIME RESTRICTION CHECK FOR COORDINATORS =================
@@ -494,6 +505,222 @@ export class PCDStorageService {
     }
 
     return null;
+  }
+
+  /**
+   * ====================================================================
+   * GOOGLE SHEETS EVENT PROVISIONING & SYNC
+   * ====================================================================
+   */
+  static async createEventOnGas(event: PCDEvent): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await this.fetchFromGas({
+        action: 'CREATE_EVENT',
+        id: event.id,
+        name: event.name,
+        date: event.date,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        venue: event.venue,
+        targetPcd: event.targetPcd,
+        coordinators: event.coordinators.join(', '),
+        sheetTabName: event.sheetTabName || `PCD - ${event.name.trim().substring(0, 30)}`,
+        createdAt: event.createdAt,
+      });
+      if (res && res.success) {
+        return { success: true, message: res.message || 'Event created on Google Sheet.' };
+      }
+    } catch {
+      // fallback to POST
+    }
+
+    const rawUrl = this.getGasWebhookUrl();
+    const candidates = getGasCandidateUrls(rawUrl);
+    const payload = {
+      action: 'CREATE_EVENT',
+      ...event,
+      coordinators: event.coordinators.join(', '),
+    };
+
+    let dispatched = false;
+    for (const cand of candidates) {
+      try {
+        await fetch(cand, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload),
+        });
+        dispatched = true;
+      } catch {
+        // try next
+      }
+    }
+
+    return {
+      success: dispatched,
+      message: dispatched ? 'Event creation dispatched to Google Sheet' : 'Failed to reach Google Sheet',
+    };
+  }
+
+  static async syncEventsFromGoogleSheet(): Promise<{
+    success: boolean;
+    count: number;
+    events: PCDEvent[];
+    message: string;
+  }> {
+    try {
+      const res = await this.fetchFromGas({ action: 'getEvents' });
+      if (res && res.success && Array.isArray(res.events)) {
+        const remoteEvents: PCDEvent[] = res.events.map((e: any) => ({
+          id: String(e.id || '').trim(),
+          name: String(e.name || 'PCD Activity').trim(),
+          description: String(e.description || 'PCD Activity scheduled by admin.').trim(),
+          venue: String(e.venue || 'SSN Campus').trim(),
+          date: String(e.date || new Date().toISOString().split('T')[0]).trim(),
+          startTime: String(e.startTime || '09:00').trim(),
+          endTime: String(e.endTime || '17:00').trim(),
+          targetPcd: (e.targetPcd || 'ALL') as 'ALL' | PCDType,
+          coordinators: Array.isArray(e.coordinators)
+            ? e.coordinators
+            : String(e.coordinators || '')
+                .split(',')
+                .map((c: string) => c.trim().toLowerCase())
+                .filter(Boolean),
+          sheetTabName: String(e.sheetTabName || `PCD - ${String(e.name || '').substring(0, 30)}`).trim(),
+          createdAt: String(e.createdAt || new Date().toISOString()),
+        }));
+
+        // Merge: keep remote events, plus any local events created very recently (< 10m) that may still be syncing
+        const localEvents = this.getEvents();
+        const remoteIds = new Set(remoteEvents.map((r) => r.id));
+        const pendingLocal = localEvents.filter(
+          (l) => !remoteIds.has(l.id) && Date.now() - new Date(l.createdAt).getTime() < 600000
+        );
+
+        const merged = [...remoteEvents, ...pendingLocal];
+        this.saveEvents(merged);
+
+        return {
+          success: true,
+          count: merged.length,
+          events: merged,
+          message: `Synced ${remoteEvents.length} events from Google Sheet.`,
+        };
+      }
+
+      const cached = this.getEvents();
+      return {
+        success: true,
+        count: cached.length,
+        events: cached,
+        message: `Using local events (${cached.length} available).`,
+      };
+    } catch {
+      const cached = this.getEvents();
+      return {
+        success: false,
+        count: cached.length,
+        events: cached,
+        message: `Offline mode: using cached events (${cached.length} available).`,
+      };
+    }
+  }
+
+  static async syncAttendanceForEvent(
+    eventId: string,
+    eventName: string,
+    sheetTabName?: string
+  ): Promise<{
+    success: boolean;
+    count: number;
+    records: AttendanceRecord[];
+  }> {
+    if (!eventId && !eventName) {
+      return { success: false, count: 0, records: [] };
+    }
+
+    try {
+      const res = await this.fetchFromGas({
+        action: 'getEventAttendance',
+        eventId: eventId || '',
+        eventName: eventName || '',
+        sheetTabName: sheetTabName || `PCD - ${eventName.substring(0, 30)}`,
+      });
+
+      if (res && res.success && Array.isArray(res.attendance)) {
+        const remoteRecords: AttendanceRecord[] = res.attendance.map((r: any) => ({
+          id: String(r.id || `att-${r.registerNumber}-${Date.now()}`),
+          eventId: eventId || String(r.eventId || ''),
+          eventName: eventName || String(r.eventName || ''),
+          digitalId: String(r.digitalId || r.registerNumber || '').trim(),
+          registerNumber: String(r.registerNumber || r.digitalId || '').trim(),
+          name: String(r.name || 'Student').trim(),
+          dept: String(r.dept || 'Engineering').trim(),
+          year: (r.year || '2nd Year') as StudentYear,
+          pcd: (r.pcd || 'NReg') as PCDType,
+          remarks: String(r.remarks || '').trim(),
+          markedBy: String(r.markedBy || 'Coordinator').trim(),
+          markedByName: String(r.markedByName || 'Coordinator').trim(),
+          timestamp: String(r.timestamp || new Date().toISOString()),
+          method: 'barcode_scanner',
+          confirmationCode: String(r.confirmationCode || ''),
+        }));
+
+        // Merge into local attendance store
+        const currentAll = this.getAttendance();
+        const otherEvents = currentAll.filter((a) => a.eventId !== eventId);
+        const thisEventLocal = currentAll.filter((a) => a.eventId === eventId);
+
+        // Deduplicate by registerNumber
+        const seenRegs = new Set(remoteRecords.map((r) => r.registerNumber.toLowerCase()));
+        const unSyncedLocal = thisEventLocal.filter(
+          (l) => !seenRegs.has(l.registerNumber.toLowerCase())
+        );
+
+        const mergedEventAttendance = [...remoteRecords, ...unSyncedLocal];
+        this.saveAttendance([...mergedEventAttendance, ...otherEvents]);
+
+        return {
+          success: true,
+          count: mergedEventAttendance.length,
+          records: mergedEventAttendance,
+        };
+      }
+    } catch {
+      // ignore
+    }
+
+    const local = this.getAttendanceForEvent(eventId);
+    return {
+      success: false,
+      count: local.length,
+      records: local,
+    };
+  }
+
+  static async deleteEventOnGas(eventId: string): Promise<boolean> {
+    try {
+      await this.fetchFromGas({ action: 'deleteEvent', eventId });
+      return true;
+    } catch {
+      const rawUrl = this.getGasWebhookUrl();
+      const candidates = getGasCandidateUrls(rawUrl);
+      for (const cand of candidates) {
+        try {
+          await fetch(cand, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'DELETE_EVENT', eventId }),
+          });
+          return true;
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return false;
   }
 
   /**

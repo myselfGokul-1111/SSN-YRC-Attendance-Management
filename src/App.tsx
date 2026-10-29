@@ -83,16 +83,22 @@ export default function App() {
     }
   }, []);
 
-  // Background Auto-Sync with Google Sheets
+  // Background Auto-Sync with Google Sheets (Students & Events)
   useEffect(() => {
-    // Initial silent sync on mount
-    PCDStorageService.syncStudentsFromGoogleSheet().catch(() => {});
+    const doFullSync = async () => {
+      try {
+        await PCDStorageService.syncStudentsFromGoogleSheet();
+        const eventRes = await PCDStorageService.syncEventsFromGoogleSheet();
+        if (eventRes && eventRes.success && eventRes.events) {
+          setEvents(eventRes.events);
+        }
+      } catch {
+        // silent background sync
+      }
+    };
 
-    // Periodic background sync every 60 seconds
-    const interval = setInterval(() => {
-      PCDStorageService.syncStudentsFromGoogleSheet().catch(() => {});
-    }, 60000);
-
+    doFullSync();
+    const interval = setInterval(doFullSync, 30000); // Poll every 30s
     return () => clearInterval(interval);
   }, []);
 
@@ -123,6 +129,24 @@ export default function App() {
       coordinatorEvent = events[0];
     }
   }
+
+  // Live Multi-Device Sync: Sync attendance for coordinator's event every 20s
+  useEffect(() => {
+    if (!coordinatorEvent) return;
+    const syncActiveAttendance = () => {
+      PCDStorageService.syncAttendanceForEvent(
+        coordinatorEvent.id,
+        coordinatorEvent.name,
+        coordinatorEvent.sheetTabName
+      ).then(() => {
+        refreshEvents();
+      }).catch(() => {});
+    };
+
+    syncActiveAttendance();
+    const interval = setInterval(syncActiveAttendance, 20000);
+    return () => clearInterval(interval);
+  }, [coordinatorEvent?.id]);
 
   // Render Login page if not authenticated
   if (!isAuthenticated) {

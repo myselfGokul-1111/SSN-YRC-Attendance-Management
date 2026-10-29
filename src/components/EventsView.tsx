@@ -17,6 +17,8 @@ import {
   X,
   AlertCircle,
   QrCode,
+  RefreshCw,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface EventsViewProps {
@@ -46,10 +48,36 @@ export const EventsView: React.FC<EventsViewProps> = ({
   const [targetPcd, setTargetPcd] = useState<'ALL' | PCDType>('ALL');
   const [coordinatorsText, setCoordinatorsText] = useState('');
   const [autoNotifyCoords, setAutoNotifyCoords] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Email status feedback
   const [notifyingEventId, setNotifyingEventId] = useState<string | null>(null);
   const [emailNotice, setEmailNotice] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await PCDStorageService.syncEventsFromGoogleSheet();
+      const currentList = PCDStorageService.getEvents();
+      for (const ev of currentList) {
+        await PCDStorageService.syncAttendanceForEvent(ev.id, ev.name, ev.sheetTabName);
+      }
+      onEventsChanged();
+      setEmailNotice({
+        type: 'success',
+        message: `✓ Synced with Google Sheets! (${res.count} events loaded from PCD_Events with dedicated attendance tabs)`,
+      });
+      setTimeout(() => setEmailNotice(null), 6000);
+    } catch {
+      setEmailNotice({
+        type: 'error',
+        message: 'Could not sync with Google Sheets. Please check your connection.',
+      });
+      setTimeout(() => setEmailNotice(null), 5000);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   /**
    * Constructs direct coordinator 1-click scanner link, preserving base subpath (GitHub Pages)
@@ -101,7 +129,7 @@ export const EventsView: React.FC<EventsViewProps> = ({
     if (autoNotifyCoords && coords.length > 0) {
       setEmailNotice({
         type: 'info',
-        message: `Dispatching coordinator invitation emails via Google Apps Script...`,
+        message: `Provisioning Google Sheet tab "${createdEvent.sheetTabName}" & dispatching emails...`,
       });
 
       Promise.all(
@@ -131,11 +159,17 @@ export const EventsView: React.FC<EventsViewProps> = ({
         } else {
           setEmailNotice({
             type: 'success',
-            message: `✓ Event created! Assignment emails sent to ${coords.join(', ')} with 1-click scanner links, credentials & ${startTime}-${endTime} access window.`,
+            message: `✓ Event created! Tab "${createdEvent.sheetTabName}" provisioned in Google Sheet & emails sent to ${coords.join(', ')}.`,
           });
           setTimeout(() => setEmailNotice(null), 8000);
         }
       });
+    } else {
+      setEmailNotice({
+        type: 'success',
+        message: `✓ Event created! Saved to PCD_Events and tab "${createdEvent.sheetTabName}" provisioned in Google Sheets.`,
+      });
+      setTimeout(() => setEmailNotice(null), 6000);
     }
 
     onEventsChanged();
@@ -237,13 +271,25 @@ export const EventsView: React.FC<EventsViewProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={() => setIsCreateModalOpen(true)}
-          className="flex items-center justify-center gap-1.5 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer transition-colors shrink-0 min-h-[40px]"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Create Event</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={handleManualSync}
+            disabled={isSyncing}
+            className="flex items-center justify-center gap-1.5 px-3 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-xs font-bold shadow-xs cursor-pointer transition-colors min-h-[40px] disabled:opacity-50"
+            title="Sync all events from PCD_Events and attendance tabs with Google Sheet"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync Sheet'}</span>
+          </button>
+
+          <button
+            onClick={() => setIsCreateModalOpen(true)}
+            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer transition-colors shrink-0 min-h-[40px]"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Create Event</span>
+          </button>
+        </div>
       </div>
 
       {/* Gmail notification feedback toast */}
@@ -280,15 +326,25 @@ export const EventsView: React.FC<EventsViewProps> = ({
             No Events Scheduled Yet
           </h2>
           <p className="text-xs text-neutral-500 max-w-sm mx-auto">
-            Click "Create Event" above to schedule an activity and assign coordinator access.
+            Click "Create Event" above to schedule an activity, or click "Sync Sheet" to load existing events from Google Sheets.
           </p>
-          <button
-            onClick={() => setIsCreateModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer transition-colors min-h-[40px]"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Create First Event</span>
-          </button>
+          <div className="flex items-center justify-center gap-2 pt-2">
+            <button
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-xs font-bold cursor-pointer transition-colors min-h-[40px]"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>Sync from Sheet</span>
+            </button>
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer transition-colors min-h-[40px]"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Create First Event</span>
+            </button>
+          </div>
         </div>
       ) : (
         <div className="space-y-3">
@@ -319,6 +375,13 @@ export const EventsView: React.FC<EventsViewProps> = ({
                         }`}
                       >
                         {timeCheck.allowed ? 'Open for Scanning' : 'Time Locked'}
+                      </span>
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-mono text-neutral-600 bg-neutral-50 px-2 py-0.5 rounded border border-neutral-200"
+                        title="Dedicated Google Sheet Tab"
+                      >
+                        <FileSpreadsheet className="w-3 h-3 text-emerald-600" />
+                        <span>{evt.sheetTabName || `PCD - ${evt.name}`}</span>
                       </span>
                     </div>
 

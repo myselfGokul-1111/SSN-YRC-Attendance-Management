@@ -49,6 +49,14 @@ function doPost(e) {
       return handleSearchStudent(data.query || data.registerNumber || data.studentId);
     } else if (action === 'NOTIFY_COORDINATOR') {
       return handleNotifyCoordinator(data);
+    } else if (action === 'CREATE_EVENT' || action === 'createEvent') {
+      return handleCreateEvent(data);
+    } else if (action === 'GET_EVENTS' || action === 'getEvents') {
+      return handleGetEvents();
+    } else if (action === 'GET_EVENT_ATTENDANCE' || action === 'getEventAttendance') {
+      return handleGetEventAttendance(data);
+    } else if (action === 'DELETE_EVENT' || action === 'deleteEvent') {
+      return handleDeleteEvent(data);
     } else {
       return jsonResponse({ success: true, message: 'Received action: ' + action });
     }
@@ -85,7 +93,27 @@ function doGet(e) {
     }, callback);
   }
 
-  // 4. Health check
+  // 4. Events Synchronization (reads all events from PCD_Events sheet)
+  if (action === 'getEvents' || action === 'GET_EVENTS') {
+    return handleGetEvents(callback);
+  }
+
+  // 5. Create event & provision dedicated sheet tab
+  if (action === 'createEvent' || action === 'CREATE_EVENT') {
+    return handleCreateEvent(e.parameter, callback);
+  }
+
+  // 6. Get attendance for a specific event
+  if (action === 'getEventAttendance' || action === 'GET_EVENT_ATTENDANCE') {
+    return handleGetEventAttendance(e.parameter, callback);
+  }
+
+  // 7. Delete / Archive event
+  if (action === 'deleteEvent' || action === 'DELETE_EVENT') {
+    return handleDeleteEvent(e.parameter, callback);
+  }
+
+  // 8. Health check
   if (e && e.parameter && e.parameter.format === 'json') {
     return jsonResponse({
       status: 'online',
@@ -254,24 +282,50 @@ function handleSearchStudent(query, callback) {
   return handleGetStudents(query, callback);
 }
 
-/**
- * ====================================================================
- * ATTENDANCE LOGGING: Appends to event sheet tab & dispatches receipt
- * ====================================================================
- */
-function handleMarkAttendance(data) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // Dedicated event tab: "PCD - [Event Name]"
-  var rawName = data.sheetTabName || data.eventName || 'Event Attendance';
-  var cleanSheetName = rawName.replace(/[:\\/?*\[\]]/g, '').trim().substring(0, 45);
-  if (!cleanSheetName) cleanSheetName = 'Event Attendance';
+var PCD_EVENTS_SHEET_NAME = 'PCD_Events';
 
-  var sheet = ss.getSheetByName(cleanSheetName);
-
-  // If sheet does not exist for this event, create it and format headers
+function getOrCreatePcdEventsSheet(ss) {
+  var sheet = ss.getSheetByName(PCD_EVENTS_SHEET_NAME);
   if (!sheet) {
-    sheet = ss.insertSheet(cleanSheetName);
+    sheet = ss.insertSheet(PCD_EVENTS_SHEET_NAME, 0);
+    var headers = [
+      'Event ID',
+      'Event Name',
+      'Date',
+      'Start Time',
+      'End Time',
+      'Venue',
+      'Target PCD',
+      'Coordinators',
+      'Sheet Tab Name',
+      'Status',
+      'Created At'
+    ];
+    sheet.appendRow(headers);
+    var headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground('#991b1b');
+    headerRange.setFontColor('#ffffff');
+    headerRange.setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    for (var col = 1; col <= headers.length; col++) {
+      sheet.autoResizeColumn(col);
+    }
+  }
+  return sheet;
+}
+
+function getCleanEventTabName(eventName) {
+  var raw = eventName || 'Event Attendance';
+  var clean = raw.replace(/[:\\/?*\[\]]/g, '').trim().substring(0, 35);
+  if (!clean) clean = 'Event Attendance';
+  if (clean.indexOf('PCD - ') === 0) return clean;
+  return 'PCD - ' + clean;
+}
+
+function getOrCreateEventAttendanceSheet(ss, sheetTabName) {
+  var sheet = ss.getSheetByName(sheetTabName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetTabName);
     var headers = [
       'Timestamp',
       'Register Number / ID',
@@ -296,6 +350,292 @@ function handleMarkAttendance(data) {
       sheet.autoResizeColumn(col);
     }
   }
+  return sheet;
+}
+
+/**
+ * ====================================================================
+ * EVENT LIFECYCLE MANAGEMENT & MULTI-DEVICE SYNC
+ * ====================================================================
+ */
+function handleCreateEvent(data, callback) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var eventsSheet = getOrCreatePcdEventsSheet(ss);
+
+    var eventId = String(data.id || data.eventId || ('evt-' + new Date().getTime().toString(36))).trim();
+    var eventName = String(data.name || data.eventName || 'PCD Activity').trim();
+    var date = String(data.date || data.eventDate || new Date().toISOString().split('T')[0]).trim();
+    var startTime = String(data.startTime || '09:00').trim();
+    var endTime = String(data.endTime || '17:00').trim();
+    var venue = String(data.venue || 'SSN Campus').trim();
+    var targetPcd = String(data.targetPcd || 'ALL').trim();
+    var rawCoords = data.coordinators || data.coordinatorEmail || '';
+    var coordinatorsStr = Array.isArray(rawCoords) ? rawCoords.join(', ') : String(rawCoords);
+    var cleanTabName = data.sheetTabName ? String(data.sheetTabName).trim() : getCleanEventTabName(eventName);
+    var status = 'ACTIVE';
+    var createdAt = String(data.createdAt || new Date().toISOString());
+
+    // 1. Check if event ID already exists in PCD_Events
+    var lastRow = eventsSheet.getLastRow();
+    var existingRowIndex = -1;
+    if (lastRow > 1) {
+      var ids = eventsSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = 0; i < ids.length; i++) {
+        if (String(ids[i][0]).trim() === eventId) {
+          existingRowIndex = i + 2;
+          break;
+        }
+      }
+    }
+
+    var rowValues = [
+      eventId,
+      eventName,
+      date,
+      startTime,
+      endTime,
+      venue,
+      targetPcd,
+      coordinatorsStr,
+      cleanTabName,
+      status,
+      createdAt
+    ];
+
+    if (existingRowIndex > 0) {
+      eventsSheet.getRange(existingRowIndex, 1, 1, rowValues.length).setValues([rowValues]);
+    } else {
+      eventsSheet.appendRow(rowValues);
+    }
+
+    // 2. Immediately provision dedicated attendance tab in Google Sheets
+    getOrCreateEventAttendanceSheet(ss, cleanTabName);
+
+    var coordsList = coordinatorsStr
+      ? coordinatorsStr.split(',').map(function(c) { return c.trim().toLowerCase(); }).filter(Boolean)
+      : [];
+
+    var eventObj = {
+      id: eventId,
+      name: eventName,
+      description: data.description || 'PCD Activity scheduled by admin.',
+      venue: venue,
+      date: date,
+      startTime: startTime,
+      endTime: endTime,
+      targetPcd: targetPcd,
+      coordinators: coordsList,
+      sheetTabName: cleanTabName,
+      createdAt: createdAt
+    };
+
+    return jsonResponse({
+      success: true,
+      message: 'Event registered in PCD_Events and tab "' + cleanTabName + '" created.',
+      event: eventObj
+    }, callback);
+  } catch (err) {
+    Logger.log('handleCreateEvent error: ' + err);
+    return jsonResponse({ success: false, error: err.toString() }, callback);
+  }
+}
+
+function handleGetEvents(callback) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(PCD_EVENTS_SHEET_NAME);
+    if (!sheet) {
+      return jsonResponse({ success: true, count: 0, events: [] }, callback);
+    }
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) {
+      return jsonResponse({ success: true, count: 0, events: [] }, callback);
+    }
+
+    var data = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+    var events = [];
+
+    for (var i = 0; i < data.length; i++) {
+      var row = data[i];
+      var eventId = String(row[0] || '').trim();
+      var eventName = String(row[1] || '').trim();
+      var status = String(row[9] || 'ACTIVE').trim().toUpperCase();
+
+      if (!eventId || !eventName || status === 'ARCHIVED') {
+        continue;
+      }
+
+      var coordsStr = String(row[7] || '').trim();
+      var coordinators = coordsStr
+        ? coordsStr.split(',').map(function(c) { return c.trim().toLowerCase(); }).filter(Boolean)
+        : [];
+
+      var dateVal = row[2] instanceof Date ? row[2].toISOString().split('T')[0] : String(row[2] || '');
+      var createdVal = row[10] instanceof Date ? row[10].toISOString() : String(row[10] || new Date().toISOString());
+
+      events.push({
+        id: eventId,
+        name: eventName,
+        description: 'PCD Activity scheduled by admin.',
+        date: dateVal,
+        startTime: String(row[3] || '09:00'),
+        endTime: String(row[4] || '17:00'),
+        venue: String(row[5] || 'SSN Campus'),
+        targetPcd: String(row[6] || 'ALL'),
+        coordinators: coordinators,
+        sheetTabName: String(row[8] || getCleanEventTabName(eventName)),
+        createdAt: createdVal
+      });
+    }
+
+    // Latest created events first
+    events.reverse();
+
+    return jsonResponse({
+      success: true,
+      count: events.length,
+      events: events
+    }, callback);
+  } catch (err) {
+    Logger.log('handleGetEvents error: ' + err);
+    return jsonResponse({ success: false, error: err.toString() }, callback);
+  }
+}
+
+function handleGetEventAttendance(params, callback) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var targetTabName = params.sheetTabName || params.sheet || '';
+    if (!targetTabName && params.eventName) {
+      targetTabName = getCleanEventTabName(params.eventName);
+    }
+
+    if (!targetTabName && params.eventId) {
+      var pcdEventsSheet = ss.getSheetByName(PCD_EVENTS_SHEET_NAME);
+      if (pcdEventsSheet && pcdEventsSheet.getLastRow() > 1) {
+        var vals = pcdEventsSheet.getRange(2, 1, pcdEventsSheet.getLastRow() - 1, 9).getValues();
+        for (var i = 0; i < vals.length; i++) {
+          if (String(vals[i][0]).trim() === String(params.eventId).trim()) {
+            targetTabName = String(vals[i][8] || '').trim();
+            break;
+          }
+        }
+      }
+    }
+
+    if (!targetTabName) {
+      return jsonResponse({ success: false, error: 'Event tab name or ID required' }, callback);
+    }
+
+    var sheet = ss.getSheetByName(targetTabName);
+    if (!sheet) {
+      var allSheets = ss.getSheets();
+      for (var s = 0; s < allSheets.length; s++) {
+        if (allSheets[s].getName().toLowerCase() === targetTabName.toLowerCase()) {
+          sheet = allSheets[s];
+          break;
+        }
+      }
+    }
+
+    if (!sheet) {
+      return jsonResponse({ success: true, count: 0, attendance: [] }, callback);
+    }
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) {
+      return jsonResponse({ success: true, count: 0, attendance: [] }, callback);
+    }
+
+    var rows = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
+    var records = [];
+
+    for (var r = 0; r < rows.length; r++) {
+      var row = rows[r];
+      var regNo = String(row[1] || '').trim();
+      if (!regNo) continue;
+
+      var ts = row[0] instanceof Date ? row[0].toISOString() : String(row[0] || new Date().toISOString());
+
+      records.push({
+        id: 'att-' + regNo + '-' + r,
+        eventId: params.eventId || '',
+        eventName: params.eventName || targetTabName.replace(/^PCD\s*-\s*/, ''),
+        digitalId: regNo,
+        registerNumber: regNo,
+        name: String(row[2] || 'Student').trim(),
+        dept: String(row[3] || 'Engineering').trim(),
+        year: String(row[4] || '2nd Year').trim(),
+        pcd: String(row[5] || 'NReg').trim(),
+        remarks: String(row[6] || '').trim(),
+        markedBy: String(row[7] || 'Coordinator').trim(),
+        markedByName: String(row[7] || 'Coordinator').trim(),
+        confirmationCode: String(row[8] || '').trim(),
+        timestamp: ts,
+        method: 'barcode_scanner'
+      });
+    }
+
+    return jsonResponse({
+      success: true,
+      sheetTabName: targetTabName,
+      count: records.length,
+      attendance: records
+    }, callback);
+  } catch (err) {
+    Logger.log('handleGetEventAttendance error: ' + err);
+    return jsonResponse({ success: false, error: err.toString() }, callback);
+  }
+}
+
+function handleDeleteEvent(params, callback) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(PCD_EVENTS_SHEET_NAME);
+    if (!sheet) {
+      return jsonResponse({ success: true, message: 'No events sheet found' }, callback);
+    }
+
+    var targetId = String(params.id || params.eventId || '').trim();
+    if (!targetId) {
+      return jsonResponse({ success: false, error: 'Missing event ID' }, callback);
+    }
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) {
+      return jsonResponse({ success: false, error: 'No events to delete' }, callback);
+    }
+
+    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]).trim() === targetId) {
+        sheet.getRange(i + 2, 10).setValue('ARCHIVED');
+        return jsonResponse({ success: true, message: 'Event ' + targetId + ' marked as ARCHIVED' }, callback);
+      }
+    }
+
+    return jsonResponse({ success: false, error: 'Event ID not found in sheet' }, callback);
+  } catch (err) {
+    Logger.log('handleDeleteEvent error: ' + err);
+    return jsonResponse({ success: false, error: err.toString() }, callback);
+  }
+}
+
+/**
+ * ====================================================================
+ * ATTENDANCE LOGGING: Appends to event sheet tab & dispatches receipt
+ * ====================================================================
+ */
+function handleMarkAttendance(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Dedicated event tab: "PCD - [Event Name]"
+  var rawName = data.sheetTabName || data.eventName || 'Event Attendance';
+  var cleanSheetName = getCleanEventTabName(rawName);
+
+  var sheet = getOrCreateEventAttendanceSheet(ss, cleanSheetName);
 
   // Check for duplicate in Column B (Register Number / ID)
   var studentId = String(data.registerNumber || data.studentId || '').trim();
