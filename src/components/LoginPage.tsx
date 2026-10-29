@@ -197,14 +197,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <span>Access Admin Dashboard</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
-
-              <div className="p-2.5 bg-neutral-950/80 border border-neutral-800/60 rounded-xl text-[11px] text-neutral-400 space-y-1">
-                <div className="font-bold text-neutral-300">Quick Credentials:</div>
-                <div className="font-mono text-[10px] text-neutral-400 flex flex-col gap-0.5">
-                  <div>Email: <span className="text-neutral-200">ssnyrcofficial@gmail.com</span></div>
-                  <div>Pass: <span className="text-neutral-200">2005@ssnYRC</span></div>
-                </div>
-              </div>
             </form>
           )}
 
@@ -265,16 +257,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <span>Launch Live Attendance Scanner</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
-
-              <div className="p-2.5 bg-neutral-950/80 border border-neutral-800/60 rounded-xl text-[11px] text-neutral-400 space-y-1">
-                <div className="font-bold text-neutral-300">Default Access Key:</div>
-                <div className="font-mono text-[10px] text-neutral-200">
-                  SSN@Coord2026
-                </div>
-                <div className="text-[10px] text-neutral-500">
-                  Coordinators also receive a 1-click bypass link via Gmail.
-                </div>
-              </div>
             </form>
           )}
         </div>
