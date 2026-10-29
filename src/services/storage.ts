@@ -11,7 +11,7 @@ const STORAGE_KEYS = {
 
 // Permanently configured Google Apps Script Web App URL
 export const DEFAULT_GAS_WEBHOOK_URL =
-  'https://script.google.com/macros/library/d/1lnIHMUvEwC0pA_QyZAVeBOV8buDt_OckMXlySVzxpeLs8CrAflm9RfrT/4';
+  'https://script.google.com/macros/s/AKfycbyySBnKP0J7c1869hDk821idHUjeTmKQ71ehVBw7_j99KJYkkz5kqX5zIiTem4NYtrCHg/exec';
 
 export const SSN_ADMIN_CREDENTIALS = {
   email: 'ssnyrcofficial@gmail.com',
