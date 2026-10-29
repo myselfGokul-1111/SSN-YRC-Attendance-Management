@@ -57,6 +57,29 @@ export default function App() {
 
     if (eventParam) {
       setTargetEventId(eventParam);
+
+      // Hydrate event if opened on a coordinator's mobile or laptop where localStorage was empty
+      const currentEvents = PCDStorageService.getEvents();
+      const existing = currentEvents.find((e) => e.id === eventParam);
+      const nameParam = params.get('name');
+      if (!existing && nameParam) {
+        const hydratedEvent: PCDEvent = {
+          id: eventParam,
+          name: nameParam,
+          description: 'PCD Activity scheduled by admin.',
+          venue: params.get('venue') || 'SSN Campus',
+          date: params.get('date') || new Date().toISOString().split('T')[0],
+          startTime: params.get('start') || '09:00',
+          endTime: params.get('end') || '17:00',
+          targetPcd: (params.get('pcd') as any) || 'ALL',
+          coordinators: coordinatorParam ? [coordinatorParam.trim().toLowerCase()] : [],
+          sheetTabName: `PCD - ${nameParam.substring(0, 30)}`,
+          createdAt: new Date().toISOString(),
+        };
+        const updated = [hydratedEvent, ...currentEvents];
+        PCDStorageService.saveEvents(updated);
+        setEvents(updated);
+      }
     }
   }, []);
 

@@ -51,6 +51,32 @@ export const EventsView: React.FC<EventsViewProps> = ({
   const [notifyingEventId, setNotifyingEventId] = useState<string | null>(null);
   const [emailNotice, setEmailNotice] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
 
+  /**
+   * Constructs direct coordinator 1-click scanner link, preserving base subpath (GitHub Pages)
+   * and packing event metadata into query params so any device can load and scan immediately.
+   */
+  const buildCoordinatorDirectLink = (evt: PCDEvent, coordEmail?: string): string => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://myselfgokul-1111.github.io';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname.replace(/\/+$/, '') : '/SSN-YRC-Attendance-Management';
+    const base = `${origin}${pathname}/`;
+
+    const query = new URLSearchParams({
+      event: evt.id,
+      name: evt.name,
+      date: evt.date,
+      start: evt.startTime,
+      end: evt.endTime,
+      venue: evt.venue,
+      pcd: evt.targetPcd,
+    });
+
+    if (coordEmail) {
+      query.set('coordinator', coordEmail.trim().toLowerCase());
+    }
+
+    return `${base}?${query.toString()}`;
+  };
+
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
@@ -73,23 +99,43 @@ export const EventsView: React.FC<EventsViewProps> = ({
 
     // Auto-dispatch coordinator emails if requested
     if (autoNotifyCoords && coords.length > 0) {
-      coords.forEach((coordEmail) => {
-        const directLink = `${window.location.origin}?event=${createdEvent.id}&coordinator=${encodeURIComponent(coordEmail)}`;
-        PCDStorageService.notifyCoordinator({
-          coordinatorEmail: coordEmail,
-          eventName: createdEvent.name,
-          eventDate: createdEvent.date,
-          startTime: createdEvent.startTime,
-          endTime: createdEvent.endTime,
-          venue: createdEvent.venue,
-          directLink,
-        });
-      });
       setEmailNotice({
-        type: 'success',
-        message: `Event created! Assignment emails queued for ${coords.join(', ')} with direct scanner link, credentials & ${startTime}-${endTime} access window.`,
+        type: 'info',
+        message: `Dispatching coordinator invitation emails via Google Apps Script...`,
       });
-      setTimeout(() => setEmailNotice(null), 8000);
+
+      Promise.all(
+        coords.map((coordEmail) => {
+          const directLink = buildCoordinatorDirectLink(createdEvent, coordEmail);
+          return PCDStorageService.notifyCoordinator({
+            coordinatorEmail: coordEmail,
+            eventName: createdEvent.name,
+            eventDate: createdEvent.date,
+            startTime: createdEvent.startTime,
+            endTime: createdEvent.endTime,
+            venue: createdEvent.venue,
+            directLink,
+          });
+        })
+      ).then((results) => {
+        const hasAuthError = results.some(
+          (r) => !r.success && r.error && (r.error.includes('MailApp.sendEmail') || r.error.includes('permission'))
+        );
+
+        if (hasAuthError) {
+          setEmailNotice({
+            type: 'error',
+            message: `⚠️ Action Required in Google Apps Script: Email permissions (MailApp) need authorization. In Apps Script Editor, run 'authorizeEmailPermissions' and click 'Allow'.`,
+          });
+          setTimeout(() => setEmailNotice(null), 12000);
+        } else {
+          setEmailNotice({
+            type: 'success',
+            message: `✓ Event created! Assignment emails sent to ${coords.join(', ')} with 1-click scanner links, credentials & ${startTime}-${endTime} access window.`,
+          });
+          setTimeout(() => setEmailNotice(null), 8000);
+        }
+      });
     }
 
     onEventsChanged();
@@ -112,31 +158,44 @@ export const EventsView: React.FC<EventsViewProps> = ({
     }
 
     setNotifyingEventId(evt.id);
-    for (const coordEmail of evt.coordinators) {
-      const directLink = `${window.location.origin}?event=${evt.id}&coordinator=${encodeURIComponent(coordEmail)}`;
-      await PCDStorageService.notifyCoordinator({
-        coordinatorEmail: coordEmail,
-        eventName: evt.name,
-        eventDate: evt.date,
-        startTime: evt.startTime,
-        endTime: evt.endTime,
-        venue: evt.venue,
-        directLink,
-      });
-    }
+    const results = await Promise.all(
+      evt.coordinators.map((coordEmail) => {
+        const directLink = buildCoordinatorDirectLink(evt, coordEmail);
+        return PCDStorageService.notifyCoordinator({
+          coordinatorEmail: coordEmail,
+          eventName: evt.name,
+          eventDate: evt.date,
+          startTime: evt.startTime,
+          endTime: evt.endTime,
+          venue: evt.venue,
+          directLink,
+        });
+      })
+    );
     setNotifyingEventId(null);
-    setEmailNotice({
-      type: 'success',
-      message: `✓ Assignment emails sent to ${evt.coordinators.join(', ')} with login credentials, 1-click link, and ${evt.startTime}-${evt.endTime} time limits!`,
-    });
-    setTimeout(() => setEmailNotice(null), 7000);
+
+    const hasAuthError = results.some(
+      (r) => !r.success && r.error && (r.error.includes('MailApp.sendEmail') || r.error.includes('permission'))
+    );
+
+    if (hasAuthError) {
+      setEmailNotice({
+        type: 'error',
+        message: `⚠️ Google Apps Script Email Authorization Required: Run 'authorizeEmailPermissions' once in your Google Apps Script editor.`,
+      });
+      setTimeout(() => setEmailNotice(null), 12000);
+    } else {
+      setEmailNotice({
+        type: 'success',
+        message: `✓ Assignment emails sent to ${evt.coordinators.join(', ')} with login credentials, 1-click link, and ${evt.startTime}-${evt.endTime} time limits!`,
+      });
+      setTimeout(() => setEmailNotice(null), 7000);
+    }
   };
 
   const copyDirectLink = (e: React.MouseEvent, evt: PCDEvent, coordEmail?: string) => {
     e.stopPropagation();
-    const origin = window.location.origin;
-    const emailParam = coordEmail ? `&coordinator=${encodeURIComponent(coordEmail)}` : '';
-    const link = `${origin}?event=${evt.id}${emailParam}`;
+    const link = buildCoordinatorDirectLink(evt, coordEmail);
     navigator.clipboard.writeText(link);
     setCopiedLinkEventId(evt.id);
     setTimeout(() => setCopiedLinkEventId(null), 2000);

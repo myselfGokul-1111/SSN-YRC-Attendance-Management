@@ -16,12 +16,17 @@
  *    Extensions > Apps Script.
  * 2. Replace all existing text with this ENTIRE file.
  * 3. Click Save (Ctrl+S / Cmd+S).
- * 4. Click "Deploy" (blue button at top right) > "New deployment".
- * 5. Click the gear icon next to "Select type" and choose "Web app".
+ * 4. AUTHORIZATION STEP (CRITICAL FOR EMAILS):
+ *    - In the function dropdown at top (next to 'Debug'), select 'authorizeEmailPermissions'.
+ *    - Click 'Run'.
+ *    - A Google popup will appear: Click 'Review permissions' -> Select your Google account
+ *      -> Click 'Advanced' -> Click 'Go to SSN PCD Activities (unsafe)' -> Click 'Allow'.
+ *    - This permanently authorizes Google Apps Script to send emails to Coordinators & Students!
+ * 5. Click "Deploy" (blue button at top right) > "New deployment" (or "Manage deployments" > Edit > New version).
  * 6. Set Description: "SSN PCD Activities v2"
  * 7. Set "Execute as": "Me (your email)"
  * 8. Set "Who has access": "Anyone"  <-- CRITICAL! Must be "Anyone"!
- * 9. Click "Deploy", click "Authorize access", and copy the Web App URL:
+ * 9. Click "Deploy" and copy the Web App URL:
  *    (e.g., https://script.google.com/macros/s/.../exec)
  * 10. Paste that URL into the Webhook settings in the SSN PCD Activities app.
  * ====================================================================
@@ -359,7 +364,7 @@ function handleNotifyCoordinator(data, callback) {
   var startTime = data.startTime || '09:00';
   var endTime = data.endTime || '17:00';
   var venue = data.venue || 'SSN College Campus';
-  var directLink = data.directLink || 'https://ais-dev-w3kbmasubibq7vlfn3nxki-46665299577.asia-southeast1.run.app';
+  var directLink = data.directLink || 'https://myselfgokul-1111.github.io/SSN-YRC-Attendance-Management/';
 
   var subject = '📋 Assignment & Access: Event Coordinator for "' + eventName + '"';
   var htmlBody =
@@ -413,8 +418,17 @@ function handleNotifyCoordinator(data, callback) {
     });
     return jsonResponse({ success: true, message: 'Notification email sent to ' + data.coordinatorEmail }, callback);
   } catch (err) {
-    Logger.log('Mail error: ' + err);
-    return jsonResponse({ success: false, error: err.toString() }, callback);
+    Logger.log('MailApp error, trying GmailApp: ' + err);
+    try {
+      GmailApp.sendEmail(data.coordinatorEmail, subject, '', {
+        htmlBody: htmlBody,
+        name: 'SSN PCD Activities'
+      });
+      return jsonResponse({ success: true, message: 'Notification email sent via Gmail to ' + data.coordinatorEmail }, callback);
+    } catch (gErr) {
+      Logger.log('GmailApp error: ' + gErr);
+      return jsonResponse({ success: false, error: err.toString() }, callback);
+    }
   }
 }
 
@@ -446,11 +460,42 @@ function sendStudentReceiptEmail(data) {
     '<p style="font-size:11px;color:#9ca3af;text-align:center;margin-top:22px;border-top:1px solid #f3f4f6;padding-top:12px;">Logged on ' + new Date().toLocaleString() + ' via SSN PCD Activities Portal</p>' +
     '</div></div>';
 
-  MailApp.sendEmail({
-    to: data.studentEmail,
-    subject: subject,
-    htmlBody: htmlBody
-  });
+  try {
+    MailApp.sendEmail({
+      to: data.studentEmail,
+      subject: subject,
+      htmlBody: htmlBody
+    });
+  } catch (err) {
+    Logger.log('MailApp receipt error, trying GmailApp: ' + err);
+    try {
+      GmailApp.sendEmail(data.studentEmail, subject, '', {
+        htmlBody: htmlBody,
+        name: 'SSN PCD Activities'
+      });
+    } catch (gErr) {
+      Logger.log('GmailApp receipt error: ' + gErr);
+    }
+  }
+}
+
+/**
+ * ====================================================================
+ * ONE-CLICK AUTHORIZATION HELPER
+ * ====================================================================
+ * Select 'authorizeEmailPermissions' from the toolbar function dropdown
+ * and click 'Run' to trigger Google's permission review window.
+ * This grants https://www.googleapis.com/auth/script.send_mail
+ */
+function authorizeEmailPermissions() {
+  var email = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
+  MailApp.sendEmail(
+    email,
+    '✓ SSN PCD Activities - Email Authorization Verified',
+    'Your Google Apps Script Web App now has full authorization to dispatch emails to event coordinators and student verification receipts!'
+  );
+  Logger.log('Successfully authorized email permissions! Test email sent to: ' + email);
+  return 'Authorized and sent test email to ' + email;
 }
 
 function jsonResponse(obj, callback) {

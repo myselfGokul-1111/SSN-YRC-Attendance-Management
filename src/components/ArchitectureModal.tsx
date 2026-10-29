@@ -195,7 +195,7 @@ function sendStudentEmail(recipient, data, confirmationCode) {
 function handleNotifyCoordinator(data) {
   const coordinatorEmail = data.coordinatorEmail;
   const event = data.event;
-  const portalUrl = data.portalUrl || 'https://ais-pre-w3kbmasubibq7vlfn3nxki-46665299577.asia-southeast1.run.app';
+  const portalUrl = data.portalUrl || 'https://myselfgokul-1111.github.io/SSN-YRC-Attendance-Management';
   const directLink = portalUrl + '/?event=' + encodeURIComponent(event.id) + '&coordinator=' + encodeURIComponent(coordinatorEmail);
   const password = data.password || 'coord@' + coordinatorEmail.split('@')[0];
 
@@ -350,13 +350,13 @@ function jsonResponse(obj) {
       setTestState({
         testing: false,
         success: true,
-        message: `✓ Connected! Webhook responded: "${res.data?.service || 'Online'}" (${res.data?.status || 'OK'})`,
+        message: res.message || '✓ Connected to Google Apps Script Webhook!',
       });
     } else {
       setTestState({
         testing: false,
         success: false,
-        message: `⚠ Connection check note: ${res.error || 'Failed to ping'}. If your browser shows {"status":"online"}, it will work for POST requests!`,
+        message: res.message || 'Failed to connect to webhook.',
       });
     }
   };

@@ -443,7 +443,7 @@ export class PCDStorageService {
         });
         if (response.ok) {
           const json = await response.json();
-          if (json && (json.success || json.students || json.status === 'online')) {
+          if (json && (json.success !== undefined || json.students || json.status === 'online')) {
             return json;
           }
         }
@@ -689,7 +689,40 @@ export class PCDStorageService {
     endTime: string;
     venue: string;
     directLink: string;
-  }): Promise<{ success: boolean; message: string }> {
+  }): Promise<{ success: boolean; message: string; error?: string }> {
+    // 1. Try GET / JSONP first to receive verified response and detect permission issues
+    try {
+      const res = await this.fetchFromGas({
+        action: 'NOTIFY_COORDINATOR',
+        coordinatorEmail: params.coordinatorEmail,
+        eventName: params.eventName,
+        eventDate: params.eventDate,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        venue: params.venue,
+        directLink: params.directLink,
+      });
+
+      if (res) {
+        if (res.success) {
+          return {
+            success: true,
+            message: `✓ Notification email dispatched to ${params.coordinatorEmail}!`,
+          };
+        }
+        if (res.error) {
+          return {
+            success: false,
+            message: `Email failed: ${res.error}`,
+            error: res.error,
+          };
+        }
+      }
+    } catch {
+      // Fall through to POST fallback
+    }
+
+    // 2. Fallback to POST dispatch
     const rawUrl = this.getGasWebhookUrl();
     const candidates = getGasCandidateUrls(rawUrl);
 
@@ -704,7 +737,7 @@ export class PCDStorageService {
         await fetch(cand, {
           method: 'POST',
           mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(payload),
         });
         success = true;
@@ -715,7 +748,9 @@ export class PCDStorageService {
 
     return {
       success,
-      message: `Notification email dispatched to ${params.coordinatorEmail}!`,
+      message: success
+        ? `Notification email dispatched to ${params.coordinatorEmail}!`
+        : `Could not connect to Google Apps Script webhook.`,
     };
   }
 
