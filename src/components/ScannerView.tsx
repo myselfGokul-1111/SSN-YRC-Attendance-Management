@@ -556,8 +556,16 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   <h3 className="text-sm sm:text-base font-black text-neutral-900">
                     {identifiedStudent.name}
                   </h3>
-                  <div className="text-xs font-mono text-neutral-600">
-                    ID: {identifiedStudent.registerNumber || identifiedStudent.digitalId} · {identifiedStudent.dept}
+                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs mt-0.5">
+                    <span className="font-mono bg-red-50 text-red-800 border border-red-200 px-2 py-0.5 rounded text-[11px] font-bold">
+                      AU Reg: {identifiedStudent.registerNumber || identifiedStudent.digitalId}
+                    </span>
+                    {identifiedStudent.digitalId && identifiedStudent.digitalId !== identifiedStudent.registerNumber && (
+                      <span className="font-mono text-neutral-600">
+                        Roll: {identifiedStudent.digitalId}
+                      </span>
+                    )}
+                    <span className="text-neutral-500">· {identifiedStudent.dept}</span>
                   </div>
                 </div>
 
@@ -567,6 +575,31 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   </span>
                   {getPcdBadge(identifiedStudent.pcd)}
                 </div>
+              </div>
+
+              {/* Editable AU Register Number (3122...) Confirmation */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 flex items-center justify-between">
+                  <span className="flex items-center gap-1">
+                    <span className="text-red-700">★</span>
+                    <span>Anna University Register No (3122...):</span>
+                  </span>
+                  {identifiedStudent.registerNumber && identifiedStudent.registerNumber.startsWith('3122') && (
+                    <span className="text-[10px] text-emerald-600 font-bold lowercase">✓ verified AU format</span>
+                  )}
+                </label>
+                <input
+                  type="text"
+                  value={identifiedStudent.registerNumber || ''}
+                  onChange={(e) =>
+                    setIdentifiedStudent({
+                      ...identifiedStudent,
+                      registerNumber: e.target.value.trim(),
+                    })
+                  }
+                  placeholder="e.g. 3122245001001"
+                  className="w-full px-3 py-2 text-xs font-mono bg-white border border-neutral-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-red-400 min-h-[38px]"
+                />
               </div>
 
               {/* Optional Remarks Section */}
@@ -647,10 +680,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 <div key={r.id} className="py-2.5 flex items-center justify-between gap-2 text-xs">
                   <div>
                     <div className="font-bold text-neutral-900">{r.name}</div>
-                    <div className="text-[11px] text-neutral-500 font-mono">
-                      {r.registerNumber || r.digitalId} · {r.dept}
+                    <div className="text-[11px] text-neutral-500 font-mono flex flex-wrap items-center gap-x-1.5">
+                      <span className="text-red-700 font-semibold">{r.registerNumber || r.digitalId}</span>
+                      {r.digitalId && r.digitalId !== r.registerNumber && (
+                        <span className="text-neutral-500">({r.digitalId})</span>
+                      )}
+                      <span>· {r.dept}</span>
                       {r.remarks && (
-                        <span className="ml-1 text-neutral-700 font-sans italic">
+                        <span className="text-neutral-700 font-sans italic">
                           • {r.remarks}
                         </span>
                       )}

@@ -68,7 +68,17 @@ export function getYearFromId(idOrReg: string): StudentYear {
   if (!idOrReg) return 'Unknown';
   const clean = idOrReg.trim().replace(/\D/g, '');
 
-  // Look for 231/237, 241/247, 251/257, 261/267
+  // Handle Anna University Register Numbers starting with 3122 (e.g. 3122245001001)
+  // Digits 4 and 5 represent the admission year (e.g. 23 -> 2023, 24 -> 2024, 25 -> 2025, 26 -> 2026)
+  if (clean.startsWith('3122') && clean.length >= 6) {
+    const auBatch = clean.substring(4, 6);
+    if (auBatch === '23') return '4th Year';
+    if (auBatch === '24') return '3rd Year';
+    if (auBatch === '25') return '2nd Year';
+    if (auBatch === '26') return '1st Year';
+  }
+
+  // Look for 231/237, 241/247, 251/257, 261/267 (SSN Roll / Digital ID)
   if (clean.startsWith('231') || clean.startsWith('237') || clean.includes('231') || clean.includes('237')) {
     return '4th Year';
   }

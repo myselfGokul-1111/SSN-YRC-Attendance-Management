@@ -32,6 +32,8 @@
  * ====================================================================
  */
 
+var YRC_REPLY_TO_EMAIL = 'yrc-attendance-management-team-ssn@ssn.edu.in';
+
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -167,7 +169,8 @@ function handleGetStudents(query, callback) {
     if (data.length < 2) continue;
 
     var headers = data[0];
-    var regCol = -1;
+    var univRegCol = -1;
+    var rollCol = -1;
     var nameCol = -1;
     var deptCol = -1;
     var yearCol = -1;
@@ -176,8 +179,10 @@ function handleGetStudents(query, callback) {
 
     for (var c = 0; c < headers.length; c++) {
       var h = String(headers[c] || '').trim().toLowerCase();
-      if (regCol === -1 && (h.indexOf('reg') !== -1 || h.indexOf('roll') !== -1 || h === 'id' || h.indexOf('barcode') !== -1 || h.indexOf('digital') !== -1 || h.indexOf('student id') !== -1)) {
-        regCol = c;
+      if (univRegCol === -1 && (h.indexOf('univ') !== -1 || h.indexOf('anna') !== -1 || (h.indexOf('reg') !== -1 && h.indexOf('roll') === -1))) {
+        univRegCol = c;
+      } else if (rollCol === -1 && (h.indexOf('roll') !== -1 || h === 'id' || h.indexOf('digital') !== -1 || h.indexOf('barcode') !== -1 || h.indexOf('student id') !== -1)) {
+        rollCol = c;
       } else if (nameCol === -1 && (h.indexOf('name') !== -1 || h.indexOf('student') !== -1)) {
         nameCol = c;
       } else if (deptCol === -1 && (h.indexOf('dept') !== -1 || h.indexOf('branch') !== -1 || h.indexOf('department') !== -1 || h.indexOf('prog') !== -1)) {
@@ -191,13 +196,13 @@ function handleGetStudents(query, callback) {
       }
     }
 
-    // Smart fallback if header labels are non-standard
-    if (regCol === -1) {
-      if (headers.length >= 2) regCol = 1; // Default to Column B
-      else regCol = 0;
+    // Fallbacks if columns are not explicitly labeled
+    if (univRegCol === -1 && rollCol === -1) {
+      if (headers.length >= 2) rollCol = 1;
+      else rollCol = 0;
     }
     if (nameCol === -1 && headers.length >= 3) {
-      nameCol = 2; // Default to Column C
+      nameCol = 2;
     }
 
     // Default PCD if the sheet itself is named after the wing
@@ -209,11 +214,46 @@ function handleGetStudents(query, callback) {
 
     for (var r = 1; r < data.length; r++) {
       var row = data[r];
-      var rawReg = regCol >= 0 ? String(row[regCol] || '').trim() : '';
-      if (!rawReg || rawReg.toLowerCase() === 'null' || rawReg.toLowerCase() === 'undefined') continue;
+      var cellUniv = univRegCol >= 0 ? String(row[univRegCol] || '').trim() : '';
+      var cellRoll = rollCol >= 0 ? String(row[rollCol] || '').trim() : '';
 
-      var cleanId = rawReg.replace(/[^a-zA-Z0-9]/g, '');
-      if (!cleanId || seenIds[cleanId.toLowerCase()]) continue;
+      // Look across all cells in the row for AU 3122... and 7-digit roll numbers if not identified yet
+      var foundUniv = '';
+      var foundRoll = '';
+
+      // Check designated cells first
+      var cleanCellUniv = cellUniv.replace(/[^0-9]/g, '');
+      if (cleanCellUniv.indexOf('3122') === 0 && cleanCellUniv.length >= 10) {
+        foundUniv = cleanCellUniv;
+      }
+      var cleanCellRoll = cellRoll.replace(/[^a-zA-Z0-9]/g, '');
+      if (cleanCellRoll.length >= 6 && cleanCellRoll.length <= 9) {
+        foundRoll = cleanCellRoll;
+      }
+
+      // If still missing, scan remaining cells in the row
+      if (!foundUniv || !foundRoll) {
+        for (var colIdx = 0; colIdx < row.length; colIdx++) {
+          var valStr = String(row[colIdx] || '').trim();
+          var digitsOnly = valStr.replace(/[^0-9]/g, '');
+          if (!foundUniv && digitsOnly.indexOf('3122') === 0 && digitsOnly.length >= 10) {
+            foundUniv = digitsOnly;
+          } else if (!foundRoll && digitsOnly.length >= 6 && digitsOnly.length <= 8 && digitsOnly.indexOf('3122') !== 0) {
+            foundRoll = digitsOnly;
+          }
+        }
+      }
+
+      var digitalId = foundRoll || (cellRoll.replace(/[^a-zA-Z0-9]/g, '') || foundUniv);
+      var registerNumber = foundUniv || (cellUniv.replace(/[^0-9]/g, '') || foundRoll || digitalId);
+
+      if (!digitalId && !registerNumber) continue;
+      if (digitalId.toLowerCase() === 'null' || registerNumber.toLowerCase() === 'null') continue;
+
+      // Duplicate check in response dataset
+      var idKey1 = digitalId ? digitalId.toLowerCase() : '';
+      var idKey2 = registerNumber ? registerNumber.toLowerCase() : '';
+      if ((idKey1 && seenIds[idKey1]) || (idKey2 && seenIds[idKey2])) continue;
 
       var rawName = nameCol >= 0 ? String(row[nameCol] || '').trim() : '';
       var rawDept = deptCol >= 0 ? String(row[deptCol] || '').trim() : 'Engineering';
@@ -228,27 +268,35 @@ function handleGetStudents(query, callback) {
       else if (rawPcdVal.indexOf('NSO') !== -1) pcd = 'NSO';
       else if (defaultPcd !== 'NReg') pcd = defaultPcd;
 
-      // Determine Year based on SSN Official Pattern:
-      // 231XXXX / 237XXXX -> 4th Year
-      // 241XXXX / 247XXXX -> 3rd Year
-      // 251XXXX / 257XXXX -> 2nd Year
+      // Determine Year based on AU 3122 prefix or SSN Digital ID Pattern
       var year = '2nd Year';
-      if (cleanId.indexOf('231') === 0 || cleanId.indexOf('237') === 0) year = '4th Year';
-      else if (cleanId.indexOf('241') === 0 || cleanId.indexOf('247') === 0) year = '3rd Year';
-      else if (cleanId.indexOf('251') === 0 || cleanId.indexOf('257') === 0) year = '2nd Year';
-      else if (rawYear) {
+      if (registerNumber.indexOf('3122') === 0 && registerNumber.length >= 6) {
+        var auBatch = registerNumber.substring(4, 6);
+        if (auBatch === '23') year = '4th Year';
+        else if (auBatch === '24') year = '3rd Year';
+        else if (auBatch === '25') year = '2nd Year';
+        else if (auBatch === '26') year = '1st Year';
+      } else if (digitalId.indexOf('231') === 0 || digitalId.indexOf('237') === 0) {
+        year = '4th Year';
+      } else if (digitalId.indexOf('241') === 0 || digitalId.indexOf('247') === 0) {
+        year = '3rd Year';
+      } else if (digitalId.indexOf('251') === 0 || digitalId.indexOf('257') === 0) {
+        year = '2nd Year';
+      } else if (rawYear) {
         if (rawYear.indexOf('4') !== -1) year = '4th Year';
         else if (rawYear.indexOf('3') !== -1) year = '3rd Year';
         else if (rawYear.indexOf('2') !== -1) year = '2nd Year';
         else if (rawYear.indexOf('1') !== -1) year = '1st Year';
       }
 
-      if (!rawEmail) rawEmail = cleanId + '@ssn.edu.in';
+      if (!rawEmail) {
+        rawEmail = (foundRoll || digitalId || registerNumber).toLowerCase() + '@ssn.edu.in';
+      }
 
       var studentObj = {
-        digitalId: cleanId,
-        registerNumber: cleanId,
-        name: rawName || ('Student (' + cleanId + ')'),
+        digitalId: digitalId,
+        registerNumber: registerNumber,
+        name: rawName || ('Student (' + (registerNumber || digitalId) + ')'),
         dept: rawDept || 'Engineering',
         year: year,
         pcd: pcd,
@@ -257,13 +305,18 @@ function handleGetStudents(query, callback) {
 
       if (query) {
         var q = query.trim().toLowerCase();
-        if (cleanId.toLowerCase().indexOf(q) !== -1 || (rawName && rawName.toLowerCase().indexOf(q) !== -1)) {
+        var matchId = (digitalId && digitalId.toLowerCase().indexOf(q) !== -1);
+        var matchReg = (registerNumber && registerNumber.toLowerCase().indexOf(q) !== -1);
+        var matchName = (rawName && rawName.toLowerCase().indexOf(q) !== -1);
+        if (matchId || matchReg || matchName) {
           allStudents.push(studentObj);
-          seenIds[cleanId.toLowerCase()] = true;
+          if (idKey1) seenIds[idKey1] = true;
+          if (idKey2) seenIds[idKey2] = true;
         }
       } else {
         allStudents.push(studentObj);
-        seenIds[cleanId.toLowerCase()] = true;
+        if (idKey1) seenIds[idKey1] = true;
+        if (idKey2) seenIds[idKey2] = true;
       }
     }
   }
@@ -328,7 +381,8 @@ function getOrCreateEventAttendanceSheet(ss, sheetTabName) {
     sheet = ss.insertSheet(sheetTabName);
     var headers = [
       'Timestamp',
-      'Register Number / ID',
+      'Student ID / Roll No',
+      'Register Number (3122...)',
       'Student Name',
       'Department',
       'Year',
@@ -549,30 +603,41 @@ function handleGetEventAttendance(params, callback) {
       return jsonResponse({ success: true, count: 0, attendance: [] }, callback);
     }
 
-    var rows = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
+    var numCols = Math.min(sheet.getLastColumn(), 10);
+    var rows = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
     var records = [];
 
     for (var r = 0; r < rows.length; r++) {
       var row = rows[r];
-      var regNo = String(row[1] || '').trim();
-      if (!regNo) continue;
+      var is10Col = numCols >= 10;
+      var digitalId = is10Col ? String(row[1] || '').trim() : String(row[1] || '').trim();
+      var regNo = is10Col ? String(row[2] || '').trim() : digitalId;
+      var name = is10Col ? String(row[3] || 'Student').trim() : String(row[2] || 'Student').trim();
+      var dept = is10Col ? String(row[4] || 'Engineering').trim() : String(row[3] || 'Engineering').trim();
+      var year = is10Col ? String(row[5] || '2nd Year').trim() : String(row[4] || '2nd Year').trim();
+      var pcd = is10Col ? String(row[6] || 'NReg').trim() : String(row[5] || 'NReg').trim();
+      var remarks = is10Col ? String(row[7] || '').trim() : String(row[6] || '').trim();
+      var markedBy = is10Col ? String(row[8] || 'Coordinator').trim() : String(row[7] || 'Coordinator').trim();
+      var confCode = is10Col ? String(row[9] || '').trim() : String(row[8] || '').trim();
+
+      if (!digitalId && !regNo) continue;
 
       var ts = row[0] instanceof Date ? row[0].toISOString() : String(row[0] || new Date().toISOString());
 
       records.push({
-        id: 'att-' + regNo + '-' + r,
+        id: 'att-' + (regNo || digitalId) + '-' + r,
         eventId: params.eventId || '',
         eventName: params.eventName || targetTabName.replace(/^PCD\s*-\s*/, ''),
-        digitalId: regNo,
-        registerNumber: regNo,
-        name: String(row[2] || 'Student').trim(),
-        dept: String(row[3] || 'Engineering').trim(),
-        year: String(row[4] || '2nd Year').trim(),
-        pcd: String(row[5] || 'NReg').trim(),
-        remarks: String(row[6] || '').trim(),
-        markedBy: String(row[7] || 'Coordinator').trim(),
-        markedByName: String(row[7] || 'Coordinator').trim(),
-        confirmationCode: String(row[8] || '').trim(),
+        digitalId: digitalId || regNo,
+        registerNumber: regNo || digitalId,
+        name: name,
+        dept: dept,
+        year: year,
+        pcd: pcd,
+        remarks: remarks,
+        markedBy: markedBy,
+        markedByName: markedBy,
+        confirmationCode: confCode,
         timestamp: ts,
         method: 'barcode_scanner'
       });
@@ -637,50 +702,74 @@ function handleMarkAttendance(data) {
 
   var sheet = getOrCreateEventAttendanceSheet(ss, cleanSheetName);
 
-  // Check for duplicate in Column B (Register Number / ID)
-  var studentId = String(data.registerNumber || data.studentId || '').trim();
+  var studentId = String(data.studentId || data.digitalId || '').trim();
+  var regNo = String(data.registerNumber || '').trim();
+
+  // If studentId starts with 3122 and regNo is empty, set regNo
+  if (studentId.indexOf('3122') === 0 && !regNo) {
+    regNo = studentId;
+  }
+  if (!studentId && regNo) studentId = regNo;
+  if (!regNo && studentId) regNo = studentId;
+
+  // Check for duplicate in Column B (Student ID) or Column C (Register Number)
   var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
 
   if (lastRow > 1) {
-    var idValues = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+    var checkCols = lastCol >= 3 ? 2 : 1;
+    var idValues = sheet.getRange(2, 2, lastRow - 1, checkCols).getValues();
     for (var i = 0; i < idValues.length; i++) {
-      if (String(idValues[i][0]).trim().toLowerCase() === studentId.toLowerCase()) {
+      var existingId = String(idValues[i][0] || '').trim().toLowerCase();
+      var existingReg = checkCols > 1 ? String(idValues[i][1] || '').trim().toLowerCase() : '';
+
+      var isDup = false;
+      if (studentId && (existingId === studentId.toLowerCase() || existingReg === studentId.toLowerCase())) isDup = true;
+      if (regNo && (existingId === regNo.toLowerCase() || existingReg === regNo.toLowerCase())) isDup = true;
+
+      if (isDup) {
         return jsonResponse({
           success: false,
           duplicate: true,
-          message: 'Student ' + studentId + ' is already marked present in ' + cleanSheetName + '.'
+          message: 'Student (' + (regNo || studentId) + ') is already marked present in ' + cleanSheetName + '.'
         });
       }
     }
   }
 
-  // Append attendance row
+  var confirmationCode = data.confirmationCode || ('SSN-' + Math.floor(100000 + Math.random() * 900000));
+
+  // Append attendance row (10 columns)
   var rowData = [
     new Date(),
     studentId,
+    regNo,
     data.studentName || 'Student',
     data.dept || 'Engineering',
     data.year || '2nd Year',
     data.pcd || 'Not Registered',
     data.remarks || '',
     data.markedByName ? (data.markedByName + ' (' + data.markedBy + ')') : (data.markedBy || 'Admin'),
-    data.confirmationCode || ('SSN-' + Math.floor(100000 + Math.random() * 900000))
+    confirmationCode
   ];
 
   sheet.appendRow(rowData);
 
   // Send confirmation receipt email if student email is present or can be inferred
   var studentMail = String(data.studentEmail || '').trim();
-  if (!studentMail && studentId) {
-    var cleanStudentId = String(studentId).toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (cleanStudentId.length >= 6) {
-      studentMail = cleanStudentId + '@ssn.edu.in';
-    }
+  if (!studentMail) {
+    if (regNo && regNo.indexOf('@') !== -1) studentMail = regNo;
+    else if (studentId && studentId.indexOf('@') !== -1) studentMail = studentId;
+    else if (studentId && studentId.length >= 6) studentMail = studentId.toLowerCase().replace(/[^a-z0-9]/g, '') + '@ssn.edu.in';
+    else if (regNo && regNo.length >= 6) studentMail = regNo.toLowerCase().replace(/[^a-z0-9]/g, '') + '@ssn.edu.in';
   }
 
   if (studentMail && studentMail.indexOf('@') !== -1) {
     try {
       data.studentEmail = studentMail;
+      data.studentId = studentId;
+      data.registerNumber = regNo;
+      data.confirmationCode = confirmationCode;
       sendStudentReceiptEmail(data);
     } catch (mailErr) {
       Logger.log('Student mail dispatch notice: ' + mailErr);
@@ -754,7 +843,9 @@ function handleNotifyCoordinator(data, callback) {
     MailApp.sendEmail({
       to: data.coordinatorEmail,
       subject: subject,
-      htmlBody: htmlBody
+      htmlBody: htmlBody,
+      replyTo: YRC_REPLY_TO_EMAIL,
+      name: 'SSN PCD Activities'
     });
     return jsonResponse({ success: true, message: 'Notification email sent to ' + data.coordinatorEmail }, callback);
   } catch (err) {
@@ -762,7 +853,8 @@ function handleNotifyCoordinator(data, callback) {
     try {
       GmailApp.sendEmail(data.coordinatorEmail, subject, '', {
         htmlBody: htmlBody,
-        name: 'SSN PCD Activities'
+        name: 'SSN PCD Activities',
+        replyTo: YRC_REPLY_TO_EMAIL
       });
       return jsonResponse({ success: true, message: 'Notification email sent via Gmail to ' + data.coordinatorEmail }, callback);
     } catch (gErr) {
@@ -776,42 +868,71 @@ function sendStudentReceiptEmail(data) {
   var pcdColor = data.pcd === 'YRC' ? '#dc2626' : (data.pcd === 'NSS' ? '#2563eb' : (data.pcd === 'NSO' ? '#059669' : '#6b7280'));
   var pcdName = data.pcd === 'NReg' ? 'Not Registered' : data.pcd;
 
-  var subject = '✓ Attendance Marked: ' + (data.eventName || 'SSN PCD Activity');
+  var eventName = data.eventName || 'SSN PCD Activity';
+  var eventDate = data.eventDate || (data.timestamp ? (new Date(data.timestamp).toISOString().split('T')[0]) : new Date().toISOString().split('T')[0]);
+  var venue = data.venue || '';
+  var rollNo = data.studentId || data.digitalId || '';
+  var regNo = data.registerNumber || rollNo || '';
+
+  var subject = '✓ Attendance Marked: ' + eventName + ' (' + eventDate + ')';
   var htmlBody =
     '<div style="font-family:Arial,-apple-system,sans-serif;max-width:550px;margin:auto;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">' +
     '<div style="background:#111827;color:#ffffff;padding:22px 20px;text-align:center;">' +
     '<h2 style="margin:0;font-size:18px;font-weight:bold;letter-spacing:-0.3px;">SSN PCD Activities</h2>' +
     '<p style="margin:4px 0 0;font-size:12px;color:#9ca3af;">Official Digital Attendance Receipt</p>' +
     '</div>' +
+
     '<div style="padding:22px 24px;color:#1f2937;">' +
-    '<div style="text-align:center;padding:10px 0 16px;">' +
+    '<div style="text-align:center;padding:6px 0 16px;">' +
     '<span style="display:inline-block;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;padding:6px 16px;border-radius:24px;font-weight:bold;font-size:13px;">✓ Attendance Recorded & Verified</span>' +
     '</div>' +
+
+    // Event Details Card
+    '<div style="background:#fef2f2;border-left:4px solid #ef4444;padding:12px 16px;margin-bottom:16px;border-radius:6px;">' +
+    '<div style="font-size:11px;font-weight:bold;text-transform:uppercase;color:#991b1b;letter-spacing:0.5px;">Event Details</div>' +
+    '<h3 style="margin:4px 0 6px;color:#111827;font-size:16px;font-weight:800;">' + eventName + '</h3>' +
+    '<p style="margin:0;font-size:13px;color:#4b5563;">' +
+    '📅 <b>Date:</b> ' + eventDate +
+    (venue ? ('<br>📍 <b>Venue:</b> ' + venue) : '') +
+    '</p>' +
+    '</div>' +
+
+    // Student & Verification Details
     '<table style="width:100%;margin-top:10px;border-collapse:collapse;font-size:13px;">' +
-    '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Event:</td><td style="padding:8px 0;font-weight:bold;color:#111827;">' + (data.eventName || 'PCD Activity') + '</td></tr>' +
     '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Student Name:</td><td style="padding:8px 0;font-weight:bold;color:#111827;">' + (data.studentName || 'Student') + '</td></tr>' +
-    '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Register / ID:</td><td style="padding:8px 0;font-family:monospace;font-weight:bold;color:#111827;">' + (data.registerNumber || data.studentId) + '</td></tr>' +
+    '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Register Number (3122...):</td><td style="padding:8px 0;font-family:monospace;font-weight:bold;color:#991b1b;">' + regNo + '</td></tr>' +
+    (rollNo && rollNo !== regNo ? ('<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Roll No / Digital ID:</td><td style="padding:8px 0;font-family:monospace;font-weight:bold;color:#111827;">' + rollNo + '</td></tr>') : '') +
     '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Department:</td><td style="padding:8px 0;font-weight:bold;color:#111827;">' + (data.dept || 'Engineering') + '</td></tr>' +
     '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Year:</td><td style="padding:8px 0;font-weight:bold;color:#111827;">' + (data.year || '2nd Year') + '</td></tr>' +
     '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">PCD Category:</td><td style="padding:8px 0;"><span style="color:' + pcdColor + ';font-weight:bold;">' + pcdName + '</span></td></tr>' +
     (data.remarks ? ('<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:8px 0;color:#6b7280;">Remark:</td><td style="padding:8px 0;font-style:italic;color:#374151;">' + data.remarks + '</td></tr>') : '') +
-    '<tr><td style="padding:8px 0;color:#6b7280;">Confirmation Code:</td><td style="padding:8px 0;font-family:monospace;font-weight:bold;color:#991b1b;">' + (data.confirmationCode || 'VERIFIED') + '</td></tr>' +
+    '<tr><td style="padding:8px 0;color:#6b7280;">Confirmation Code:</td><td style="padding:8px 0;font-family:monospace;font-weight:bold;color:#111827;">' + (data.confirmationCode || 'VERIFIED') + '</td></tr>' +
     '</table>' +
-    '<p style="font-size:11px;color:#9ca3af;text-align:center;margin-top:22px;border-top:1px solid #f3f4f6;padding-top:12px;">Logged on ' + new Date().toLocaleString() + ' via SSN PCD Activities Portal</p>' +
+
+    // Reply-to prompt
+    '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-top:18px;font-size:12px;color:#4b5563;text-align:center;">' +
+    '💬 <b>Questions or discrepancies?</b><br>' +
+    'Reply directly to this email to reach the <b style="color:#111827;">SSN YRC Attendance Management Team</b> (<a href="mailto:yrc-attendance-management-team-ssn@ssn.edu.in" style="color:#dc2626;text-decoration:none;">yrc-attendance-management-team-ssn@ssn.edu.in</a>).' +
+    '</div>' +
+
+    '<p style="font-size:11px;color:#9ca3af;text-align:center;margin-top:18px;border-top:1px solid #f3f4f6;padding-top:12px;">Logged on ' + new Date().toLocaleString() + ' via SSN PCD Activities Portal</p>' +
     '</div></div>';
 
   try {
     MailApp.sendEmail({
       to: data.studentEmail,
       subject: subject,
-      htmlBody: htmlBody
+      htmlBody: htmlBody,
+      replyTo: YRC_REPLY_TO_EMAIL,
+      name: 'SSN PCD Activities'
     });
   } catch (err) {
     Logger.log('MailApp receipt error, trying GmailApp: ' + err);
     try {
       GmailApp.sendEmail(data.studentEmail, subject, '', {
         htmlBody: htmlBody,
-        name: 'SSN PCD Activities'
+        name: 'SSN PCD Activities',
+        replyTo: YRC_REPLY_TO_EMAIL
       });
     } catch (gErr) {
       Logger.log('GmailApp receipt error: ' + gErr);
@@ -829,11 +950,13 @@ function sendStudentReceiptEmail(data) {
  */
 function authorizeEmailPermissions() {
   var email = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
-  MailApp.sendEmail(
-    email,
-    '✓ SSN PCD Activities - Email Authorization Verified',
-    'Your Google Apps Script Web App now has full authorization to dispatch emails to event coordinators and student verification receipts!'
-  );
+  MailApp.sendEmail({
+    to: email,
+    subject: '✓ SSN PCD Activities - Email Authorization Verified',
+    body: 'Your Google Apps Script Web App now has full authorization to dispatch emails to event coordinators and student verification receipts! Outbound replies are directed to ' + YRC_REPLY_TO_EMAIL,
+    replyTo: YRC_REPLY_TO_EMAIL,
+    name: 'SSN PCD Activities'
+  });
   Logger.log('Successfully authorized email permissions! Test email sent to: ' + email);
   return 'Authorized and sent test email to ' + email;
 }

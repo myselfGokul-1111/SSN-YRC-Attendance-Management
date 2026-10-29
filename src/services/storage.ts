@@ -379,12 +379,32 @@ export class PCDStorageService {
     );
     if (partial) return partial;
 
-    // 3. Fallback: Parse directly from SSN Registration Number pattern
+    // 3. Fallback: Parse directly from AU 3122 Register Number or SSN Digital ID pattern
     const year = getYearFromId(clean);
 
     let dept = 'Engineering';
     const num = clean.replace(/\D/g, '');
-    if (num.length >= 7) {
+
+    if (num.startsWith('3122') && num.length >= 9) {
+      // Anna University branch codes (digits 6-8: e.g. 3122 24 105 ...)
+      const auBranchCode = num.substring(6, 9);
+      const auDeptMap: Record<string, string> = {
+        '101': 'Civil',
+        '102': 'Automobile',
+        '103': 'Civil',
+        '104': 'BME',
+        '105': 'CSE',
+        '106': 'ECE',
+        '107': 'EEE',
+        '114': 'Mech',
+        '205': 'IT',
+        '214': 'Biotech',
+        '218': 'Chemical',
+      };
+      if (auDeptMap[auBranchCode]) {
+        dept = auDeptMap[auBranchCode];
+      }
+    } else if (num.length >= 7) {
       const deptCode = num.substring(3, 5);
       const deptMap: Record<string, string> = {
         '01': 'Civil',
@@ -401,9 +421,13 @@ export class PCDStorageService {
       }
     }
 
+    const isAuReg = num.startsWith('3122');
+    const registerNumber = isAuReg ? clean : clean;
+    const digitalId = clean;
+
     return {
-      digitalId: clean,
-      registerNumber: clean,
+      digitalId,
+      registerNumber,
       name: `Student (${clean})`,
       dept,
       pcd: 'NReg',
@@ -860,17 +884,35 @@ export class PCDStorageService {
     const rawUrl = this.getGasWebhookUrl();
     const candidates = getGasCandidateUrls(rawUrl);
 
-    const studentEmail =
-      record.studentEmail && record.studentEmail.includes('@')
-        ? record.studentEmail
-        : record.registerNumber
-        ? `${record.registerNumber.toLowerCase().replace(/[^a-z0-9]/g, '')}@ssn.edu.in`
-        : '';
+    // Look up event details (eventDate, venue, etc.)
+    const event = this.getEvents().find((e) => e.id === record.eventId);
+    const eventDate = event?.date || '';
+    const venue = event?.venue || '';
+
+    // Smart student email resolution
+    let studentEmail = record.studentEmail && record.studentEmail.includes('@') ? record.studentEmail : '';
+    if (!studentEmail) {
+      const student = this.getStudents().find(
+        (s) =>
+          (s.digitalId && s.digitalId.toLowerCase() === record.digitalId.toLowerCase()) ||
+          (s.registerNumber && s.registerNumber.toLowerCase() === record.registerNumber.toLowerCase())
+      );
+      if (student && student.email && student.email.includes('@')) {
+        studentEmail = student.email;
+      }
+    }
+    if (!studentEmail && record.registerNumber) {
+      studentEmail = `${record.registerNumber.toLowerCase().replace(/[^a-z0-9]/g, '')}@ssn.edu.in`;
+    } else if (!studentEmail && record.digitalId) {
+      studentEmail = `${record.digitalId.toLowerCase().replace(/[^a-z0-9]/g, '')}@ssn.edu.in`;
+    }
 
     const payload = {
       action: 'MARK_ATTENDANCE',
       eventId: record.eventId,
       eventName: record.eventName,
+      eventDate,
+      venue,
       sheetTabName: `PCD - ${record.eventName.substring(0, 30)}`,
       timestamp: record.timestamp,
       studentId: record.digitalId,
@@ -892,7 +934,7 @@ export class PCDStorageService {
         await fetch(cand, {
           method: 'POST',
           mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(payload),
         });
         dispatched = true;
